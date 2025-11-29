@@ -1,23 +1,33 @@
+# app.py
 from flask import Flask, request, jsonify, render_template
 from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
 from telegram.error import RetryAfter, Unauthorized
 import logging
 import time
+import os
+
 from config import Config
 from database import Database
 
-# === 1. Инициализация приложения и базы данных (в начале!) ===
+# === Настройка логирования ===
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# === Инициализация приложения ===
 app = Flask(__name__)
 app.config.from_object(Config)
 
-# Инициализация базы данных — ДО декораторов!
+# === Инициализация базы данных ===
 db = Database()
 
-# === 2. Декораторы доступа ===
+# === Состояния для диалога ===
+NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
+
+# === Декораторы доступа ===
 def admin_required(func):
     def wrapper(update: Update, context: CallbackContext):
-        user_id = update.message.from_user.id
+        user_id = update.effective_user.id
         if not db.admin_manager.is_admin(user_id):
             update.message.reply_text("❌ У вас нет прав администратора.")
             return
@@ -26,14 +36,14 @@ def admin_required(func):
 
 def super_admin_required(func):
     def wrapper(update: Update, context: CallbackContext):
-        user_id = update.message.from_user.id
+        user_id = update.effective_user.id
         if not db.admin_manager.is_super_admin(user_id):
             update.message.reply_text("❌ У вас нет прав супер-администратора.")
             return
         return func(update, context)
     return wrapper
 
-# === 3. Команды ===
+# === Команды для админов ===
 @admin_required
 def admin_stats(update: Update, context: CallbackContext):
     stats = db.get_stats()
@@ -61,10 +71,10 @@ def admin_add(update: Update, context: CallbackContext):
         if role not in ['admin', 'moderator']:
             update.message.reply_text("Роль: admin или moderator")
             return
-        db.admin_manager.add_admin(tid, f"user_{tid}", "Неизвестно", role, update.message.from_user.id)
+        db.admin_manager.add_admin(tid, f"user_{tid}", "Неизвестно", role, update.effective_user.id)
         update.message.reply_text(f"✅ Админ {tid} добавлен как {role}")
     except Exception as e:
-        logging.exception("Ошибка добавления админа")
+        logger.exception("Ошибка добавления админа")
         update.message.reply_text("❌ Ошибка")
 
 @super_admin_required
@@ -73,7 +83,8 @@ def admin_list(update: Update, context: CallbackContext):
     msg = "👥 *Администраторы:*\n"
     for a in admins:
         status = "🟢" if a.is_active else "🔴"
-        msg += f"{status} `{a.telegram_id}` — {a.role}\n"
+        role_icon = "👑" if a.role == 'admin' else "🛠️"
+        msg += f"{status} {role_icon} `{a.telegram_id}` — {a.role}\n"
     update.message.reply_text(msg, parse_mode='Markdown')
 
 @admin_required
@@ -94,19 +105,18 @@ def admin_broadcast(update: Update, context: CallbackContext):
             continue
         except RetryAfter as e:
             time.sleep(e.retry_after)
-            bot.send_message(uid, text, parse_mode='Markdown')
+            bot.send_message(uid, f"📢 {text}", parse_mode='Markdown')
             ok += 1
         except Exception as e:
-            logging.warning(f"Не отправлено {uid}: {e}")
+            logger.warning(f"Не отправлено {uid}: {e}")
             fail += 1
     update.message.reply_text(f"✅ Готово: {ok}, ❌ ошибок: {fail}")
 
-# === 4. Диалог регистрации ===
-NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
-
+# === Диалог регистрации ===
 def start(update: Update, context: CallbackContext) -> int:
-    context.user_data = context.user_data or {}
-    context.user_data['telegram_id'] = update.message.from_user.id
+    context.user_data.clear()
+    context.user_data['telegram_id'] = update.effective_user.id
+    context.user_data['username'] = update.effective_user.username
     update.message.reply_text("Введите ФИО:")
     return NAME
 
@@ -149,14 +159,14 @@ def get_age(update: Update, context: CallbackContext) -> int:
 def get_phone(update: Update, context: CallbackContext) -> int:
     phone = update.message.contact.phone_number if update.message.contact else update.message.text
     context.user_data['phone'] = phone
-    update.message.reply_text("Опыт:")
+    update.message.reply_text("Расскажите об опыте фехтования:")
     return EXPERIENCE
 
 def get_experience(update: Update, context: CallbackContext) -> int:
     context.user_data['experience'] = update.message.text
     data = context.user_data
     msg = f"""
-📋 Проверьте:
+📋 Проверьте данные:
 ФИО: {data['full_name']}
 Оружие: {data['weapon_type']}
 Телефон: {data['phone']}
@@ -170,7 +180,7 @@ def get_experience(update: Update, context: CallbackContext) -> int:
 def confirm_registration(update: Update, context: CallbackContext) -> int:
     if update.message.text == '✅ Отправить':
         db.add_registration(context.user_data)
-        update.message.reply_text("✅ Заявка отправлена!", reply_markup=None)
+        update.message.reply_text("✅ Заявка отправлена! Администратор свяжется с вами.", reply_markup=None)
     else:
         return start(update, context)
     return ConversationHandler.END
@@ -179,38 +189,40 @@ def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Отменено.", reply_markup=None)
     return ConversationHandler.END
 
-# === 5. setup_dispatcher (один раз!) ===
+# === Инициализация Dispatcher ===
 def setup_dispatcher():
     bot = Bot(token=Config.TELEGRAM_TOKEN)
-    dp = Dispatcher(bot, None, workers=0)
-    conv = ConversationHandler(
+    dp = Dispatcher(bot, None, workers=0, use_context=True)
+    
+    conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
-            NAME: [MessageHandler(Filters.text, get_name)],
-            WEAPON: [MessageHandler(Filters.text, get_weapon)],
-            CATEGORY: [MessageHandler(Filters.text, get_category)],
-            AGE: [MessageHandler(Filters.text, get_age)],
+            NAME: [MessageHandler(Filters.text & ~Filters.command, get_name)],
+            WEAPON: [MessageHandler(Filters.text & ~Filters.command, get_weapon)],
+            CATEGORY: [MessageHandler(Filters.text & ~Filters.command, get_category)],
+            AGE: [MessageHandler(Filters.text & ~Filters.command, get_age)],
             PHONE: [MessageHandler(Filters.text | Filters.contact, get_phone)],
-            EXPERIENCE: [MessageHandler(Filters.text, get_experience)],
-            CONFIRM: [MessageHandler(Filters.text, confirm_registration)],
+            EXPERIENCE: [MessageHandler(Filters.text & ~Filters.command, get_experience)],
+            CONFIRM: [MessageHandler(Filters.text & ~Filters.command, confirm_registration)],
         },
         fallbacks=[CommandHandler('cancel', cancel)]
     )
-    dp.add_handler(conv)
+    
+    dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler('admin_stats', admin_stats))
     dp.add_handler(CommandHandler('admin_add', admin_add))
     dp.add_handler(CommandHandler('admin_list', admin_list))
     dp.add_handler(CommandHandler('broadcast', admin_broadcast))
+    
     return dp
 
-# === 6. Глобальные bot и dispatcher ===
-bot = Bot(token=Config.TELEGRAM_TOKEN)
+# === Создание dispatcher после db ===
 dispatcher = setup_dispatcher()
 
-# === 7. Flask routes ===
+# === Flask маршруты ===
 @app.route('/')
 def home():
-    return jsonify({"status": "running"})
+    return jsonify({"status": "running", "service": "TolyattiFencingRegBot"})
 
 @app.route('/admin')
 def admin():
@@ -219,7 +231,7 @@ def admin():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    update = Update.de_json(request.get_json(), bot)
+    update = Update.de_json(request.get_json(), dispatcher.bot)
     dispatcher.process_update(update)
     return 'ok'
 
@@ -227,15 +239,18 @@ def webhook():
 def set_webhook_route():
     url = Config.WEBHOOK_URL
     if not url:
-        return "❌ WEBHOOK_URL не задан", 400
-    info = bot.get_webhook_info()
-    if info.url == url:
-        return f"✅ Уже установлен: {url}"
-    if bot.set_webhook(url):
-        return f"✅ Вебхук установлен на {url}"
-    return "❌ Ошибка установки", 500
+        return jsonify({"error": "WEBHOOK_URL не задан"}), 400
+    try:
+        result = dispatcher.bot.set_webhook(url)
+        if result:
+            return jsonify({"status": "success", "url": url})
+        else:
+            return jsonify({"error": "Не удалось установить вебхук"}), 500
+    except Exception as e:
+        logger.error(f"Ошибка вебхука: {e}")
+        return jsonify({"error": str(e)}), 500
 
-# === 8. Запуск ===
+# === Точка входа ===
 if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO)
-    app.run(host='0.0.0.0', port=int(Config.PORT or 5000), debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
