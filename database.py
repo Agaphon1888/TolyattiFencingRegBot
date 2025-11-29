@@ -17,10 +17,10 @@ class Registration(Base):
     category = Column(String(50), nullable=False)
     age_group = Column(String(50), nullable=False)
     phone = Column(String(20), nullable=False)
-    experience = Column(String(100))
+    experience = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
-    status = Column(String(20), default='pending')  # pending, confirmed, rejected
-    notes = Column(Text)  # Заметки администратора
+    status = Column(String(20), default='pending')
+    notes = Column(Text)
 
 class Admin(Base):
     __tablename__ = 'admins'
@@ -45,7 +45,6 @@ class Database:
         self.session = Session()
         
         # Инициализация менеджера администраторов
-        from admin import AdminManager
         self.admin_manager = AdminManager(self.session)
         self.admin_manager.initialize_super_admins()
     
@@ -106,3 +105,90 @@ class Database:
             'rejected': rejected,
             'weapons': weapon_stats
         }
+
+class AdminManager:
+    def __init__(self, db_session):
+        self.db = db_session
+        
+    def is_admin(self, telegram_id):
+        """Проверяет, является ли пользователь администратором"""
+        admin = self.db.query(Admin).filter_by(
+            telegram_id=telegram_id, 
+            is_active=True
+        ).first()
+        return admin is not None
+    
+    def is_super_admin(self, telegram_id):
+        """Проверяет, является ли пользователь супер-админом"""
+        admin = self.db.query(Admin).filter_by(
+            telegram_id=telegram_id, 
+            role='admin',
+            is_active=True
+        ).first()
+        return admin is not None
+    
+    def add_admin(self, telegram_id, username, full_name, role='moderator', created_by=None):
+        """Добавляет нового администратора"""
+        existing = self.db.query(Admin).filter_by(telegram_id=telegram_id).first()
+        if existing:
+            if not existing.is_active:
+                existing.is_active = True
+                existing.role = role
+                self.db.commit()
+                return existing
+            return None
+        
+        admin = Admin(
+            telegram_id=telegram_id,
+            username=username,
+            full_name=full_name,
+            role=role,
+            created_by=created_by
+        )
+        self.db.add(admin)
+        self.db.commit()
+        return admin
+    
+    def remove_admin(self, telegram_id, removed_by):
+        """Деактивирует администратора"""
+        admin = self.db.query(Admin).filter_by(telegram_id=telegram_id).first()
+        if admin and admin.telegram_id != removed_by:
+            admin.is_active = False
+            self.db.commit()
+            return True
+        return False
+    
+    def get_all_admins(self):
+        """Возвращает список всех активных администраторов"""
+        return self.db.query(Admin).filter_by(is_active=True).all()
+    
+    def get_admin_stats(self):
+        """Статистика по администраторам"""
+        total = self.db.query(Admin).filter_by(is_active=True).count()
+        admins = self.db.query(Admin).filter_by(role='admin', is_active=True).count()
+        moderators = self.db.query(Admin).filter_by(role='moderator', is_active=True).count()
+        
+        return {
+            'total': total,
+            'admins': admins,
+            'moderators': moderators
+        }
+    
+    def initialize_super_admins(self):
+        """Инициализирует супер-админов из переменной окружения"""
+        admin_ids = os.environ.get('ADMIN_TELEGRAM_IDS', '')
+        if not admin_ids:
+            return
+        
+        for telegram_id in admin_ids.split(','):
+            try:
+                telegram_id = int(telegram_id.strip())
+                self.add_admin(
+                    telegram_id=telegram_id,
+                    username='super_admin',
+                    full_name='Super Administrator',
+                    role='admin',
+                    created_by=0
+                )
+            except ValueError:
+                continue
