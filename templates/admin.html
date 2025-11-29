@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Админ-панель — Tolyatti Fencing</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        h1 { color: #2c3e50; }
+    </style>
+</head>
+<body>
+    <h1>📋 Заявки на участие (всего: {{ registrations|length }})</h1>
+    <a href="/admin">Обновить</a> | <a href="/set_webhook">Установить вебхук</a>
+    <table>
+        <thead>
+            <tr>
+                <th>ФИО</th>
+                <th>Оружие</th>
+                <th>Категория</th>
+                <th>Возраст</th>
+                <th>Телефон</th>
+                <th>Статус</th>
+                <th>Дата</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for r in registrations %}
+            <tr>
+                <td>{{ r.full_name }}</td>
+                <td>{{ r.weapon_type }}</td>
+                <td>{{ r.category }}</td>
+                <td>{{ r.age_group }}</td>
+                <td>{{ r.phone }}</td>
+                <td><strong>{{ r.status }}</strong></td>
+                <td>{{ r.created_at.strftime('%d.%m.%Y %H:%M') if r.created_at else '' }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7">Нет заявок</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
