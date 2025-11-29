@@ -1,5 +1,5 @@
 Flask==2.3.3
 python-telegram-bot==13.15
-SQLAlchemy==2.0.25
+SQLAlchemy==1.4.48
 python-dotenv==1.0.0
 gunicorn==21.2.0
