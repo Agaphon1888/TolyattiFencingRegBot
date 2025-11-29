@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: fencing-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn --bind 0.0.0.0:$PORT app:app
+    name: TolyattiFencingRegBot
+    env: docker
+    region: oregon
+    plan: free        # или starter
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
@@ -11,6 +11,3 @@ services:
         fromPlan: true
       - key: PORT
         value: 10000
-    env:
-      - key: PYTHONPATH
-        value: /app
