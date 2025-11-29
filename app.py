@@ -6,6 +6,163 @@ import os
 from database import Database
 from config import Config
 
+def admin_required(func):
+    """Декоратор для проверки прав администратора"""
+    def wrapper(update: Update, context: CallbackContext):
+        user_id = update.message.from_user.id
+        if not db.admin_manager.is_admin(user_id):
+            update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        return func(update, context)
+    return wrapper
+
+def super_admin_required(func):
+    """Декоратор для проверки прав супер-администратора"""
+    def wrapper(update: Update, context: CallbackContext):
+        user_id = update.message.from_user.id
+        if not db.admin_manager.is_super_admin(user_id):
+            update.message.reply_text("❌ У вас нет прав супер-администратора.")
+            return
+        return func(update, context)
+    return wrapper
+
+@admin_required
+def admin_stats(update: Update, context: CallbackContext):
+    """Статистика для администратора"""
+    stats = db.get_stats()
+    admin_stats = db.admin_manager.get_admin_stats()
+    
+    message = f"""
+📊 *Статистика системы:*
+
+*Заявки:*
+• Всего: {stats['total']}
+• Ожидают: {stats['pending']}
+• Подтверждены: {stats['confirmed']}
+• Отклонены: {stats['rejected']}
+
+*Администраторы:*
+• Всего: {admin_stats['total']}
+• Админы: {admin_stats['admins']}
+• Модераторы: {admin_stats['moderators']}
+
+*По оружию:*
+"""
+    
+    for weapon, weapon_stats in stats['weapons'].items():
+        message += f"• {weapon}: {weapon_stats['total']} (✓{weapon_stats['confirmed']} ⏳{weapon_stats['pending']})\n"
+    
+    update.message.reply_text(message, parse_mode='Markdown')
+
+@super_admin_required
+def admin_add(update: Update, context: CallbackContext):
+    """Добавление администратора"""
+    if not context.args:
+        update.message.reply_text("Использование: /admin_add <telegram_id> <role=moderator>")
+        return
+    
+    try:
+        telegram_id = int(context.args[0])
+        role = context.args[1] if len(context.args) > 1 else 'moderator'
+        
+        if role not in ['admin', 'moderator']:
+            update.message.reply_text("Роль должна быть 'admin' или 'moderator'")
+            return
+        
+        user = update.message.from_user
+        result = db.admin_manager.add_admin(
+            telegram_id=telegram_id,
+            username=f"user_{telegram_id}",
+            full_name="Неизвестно",
+            role=role,
+            created_by=user.id
+        )
+        
+        if result:
+            update.message.reply_text(f"✅ Администратор {telegram_id} добавлен с ролью '{role}'")
+        else:
+            update.message.reply_text("❌ Не удалось добавить администратора")
+            
+    except ValueError:
+        update.message.reply_text("❌ Неверный формат ID")
+
+@super_admin_required
+def admin_list(update: Update, context: CallbackContext):
+    """Список администраторов"""
+    admins = db.admin_manager.get_all_admins()
+    
+    if not admins:
+        update.message.reply_text("Нет активных администраторов")
+        return
+    
+    message = "👥 *Список администраторов:*\n\n"
+    for admin in admins:
+        status = "🟢" if admin.is_active else "🔴"
+        message += f"{status} ID: {admin.telegram_id}\n"
+        message += f"   Роль: {admin.role}\n"
+        message += f"   Имя: {admin.full_name or 'Не указано'}\n"
+        message += f"   С: {admin.created_at.strftime('%d.%m.%Y')}\n\n"
+    
+    update.message.reply_text(message, parse_mode='Markdown')
+
+@admin_required
+def admin_broadcast(update: Update, context: CallbackContext):
+    """Рассылка сообщения всем участникам"""
+    if not context.args:
+        update.message.reply_text("Использование: /broadcast <сообщение>")
+        return
+    
+    message = ' '.join(context.args)
+    registrations = db.get_all_registrations()
+    
+    # Получаем уникальные telegram_id
+    user_ids = set(reg.telegram_id for reg in registrations)
+    
+    bot = context.bot
+    success = 0
+    failed = 0
+    
+    for user_id in user_ids:
+        try:
+            bot.send_message(user_id, f"📢 *Объявление от организаторов:*\n\n{message}", parse_mode='Markdown')
+            success += 1
+        except Exception as e:
+            failed += 1
+    
+    update.message.reply_text(f"✅ Рассылка завершена:\n• Успешно: {success}\n• Не удалось: {failed}")
+
+# Добавьте эти обработчики в setup_dispatcher():
+def setup_dispatcher():
+    """Настройка диспетчера"""
+    bot = Bot(token=app.config['TELEGRAM_TOKEN'])
+    dispatcher = Dispatcher(bot, None, workers=0)
+    
+    # Обработчик диалога регистрации
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            NAME: [MessageHandler(Filters.text & ~Filters.command, get_name)],
+            WEAPON: [MessageHandler(Filters.text & ~Filters.command, get_weapon)],
+            CATEGORY: [MessageHandler(Filters.text & ~Filters.command, get_category)],
+            AGE: [MessageHandler(Filters.text & ~Filters.command, get_age)],
+            PHONE: [MessageHandler(Filters.text | Filters.contact, get_phone)],
+            EXPERIENCE: [MessageHandler(Filters.text & ~Filters.command, get_experience)],
+            CONFIRM: [MessageHandler(Filters.text & ~Filters.command, confirm_registration)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
+    dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(CommandHandler('myregistrations', view_registrations))
+    
+    # Админ-команды
+    dispatcher.add_handler(CommandHandler('admin_stats', admin_stats))
+    dispatcher.add_handler(CommandHandler('admin_add', admin_add))
+    dispatcher.add_handler(CommandHandler('admin_list', admin_list))
+    dispatcher.add_handler(CommandHandler('broadcast', admin_broadcast))
+    
+    return dispatcher
+
 # Состояния разговора
 NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
 
