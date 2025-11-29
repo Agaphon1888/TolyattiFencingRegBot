@@ -1,13 +1,12 @@
 from flask import Flask, request, jsonify, render_template_string
 from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
 import logging
-import asyncio
-from threading import Thread
+import os
 from config import Config
 from database import Database
 
-# === Инициализация приложения и базы данных ===
+# === Инициализация приложения ===
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -21,46 +20,44 @@ logger = logging.getLogger(__name__)
 # Инициализация базы данных
 db = Database()
 
-# === Состояния разговора ===
-NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
-
 # === Глобальные переменные для бота ===
-bot_app = None
-bot_thread = None
+updater = None
+dispatcher = None
 
 def init_bot():
     """Инициализация бота"""
-    global bot_app
+    global updater, dispatcher
     try:
-        bot_app = Application.builder().token(app.config['TELEGRAM_TOKEN']).build()
+        updater = Updater(token=app.config['TELEGRAM_TOKEN'], use_context=True)
+        dispatcher = updater.dispatcher
         
         # Обработчик диалога регистрации
         conv_handler = ConversationHandler(
             entry_points=[CommandHandler('start', start)],
             states={
-                NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-                WEAPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_weapon)],
-                CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_category)],
-                AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_age)],
-                PHONE: [MessageHandler(filters.TEXT | filters.CONTACT, get_phone)],
-                EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_experience)],
-                CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_registration)],
+                NAME: [MessageHandler(Filters.text & ~Filters.command, get_name)],
+                WEAPON: [MessageHandler(Filters.text & ~Filters.command, get_weapon)],
+                CATEGORY: [MessageHandler(Filters.text & ~Filters.command, get_category)],
+                AGE: [MessageHandler(Filters.text & ~Filters.command, get_age)],
+                PHONE: [MessageHandler(Filters.text | Filters.contact, get_phone)],
+                EXPERIENCE: [MessageHandler(Filters.text & ~Filters.command, get_experience)],
+                CONFIRM: [MessageHandler(Filters.text & ~Filters.command, confirm_registration)],
             },
             fallbacks=[CommandHandler('cancel', cancel)]
         )
 
-        bot_app.add_handler(conv_handler)
-        bot_app.add_handler(CommandHandler('myregistrations', view_registrations))
+        dispatcher.add_handler(conv_handler)
+        dispatcher.add_handler(CommandHandler('myregistrations', view_registrations))
         
         # Админ-команды
-        bot_app.add_handler(CommandHandler('admin_stats', admin_stats))
-        bot_app.add_handler(CommandHandler('admin_add', admin_add))
-        bot_app.add_handler(CommandHandler('admin_list', admin_list))
-        bot_app.add_handler(CommandHandler('broadcast', admin_broadcast))
-        bot_app.add_handler(CommandHandler('admin_help', admin_help))
+        dispatcher.add_handler(CommandHandler('admin_stats', admin_stats))
+        dispatcher.add_handler(CommandHandler('admin_add', admin_add))
+        dispatcher.add_handler(CommandHandler('admin_list', admin_list))
+        dispatcher.add_handler(CommandHandler('broadcast', admin_broadcast))
+        dispatcher.add_handler(CommandHandler('admin_help', admin_help))
         
         # Обработчик неизвестных команд
-        bot_app.add_handler(MessageHandler(filters.COMMAND, unknown_command))
+        dispatcher.add_handler(MessageHandler(Filters.command, unknown_command))
         
         logger.info("Бот инициализирован успешно")
         return True
@@ -68,39 +65,33 @@ def init_bot():
         logger.error(f"Ошибка инициализации бота: {e}")
         return False
 
-def run_bot():
-    """Запуск бота в отдельном потоке"""
-    global bot_app
-    if bot_app:
-        try:
-            bot_app.run_polling()
-        except Exception as e:
-            logger.error(f"Ошибка в run_bot: {e}")
+# === Состояния разговора ===
+NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
 
 # === Декораторы доступа ===
 def admin_required(func):
     """Декоратор для проверки прав администратора"""
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def wrapper(update, context):
         user_id = update.message.from_user.id
         if not db.admin_manager.is_admin(user_id):
-            await update.message.reply_text("❌ У вас нет прав администратора.")
+            update.message.reply_text("❌ У вас нет прав администратора.")
             return
-        return await func(update, context)
+        return func(update, context)
     return wrapper
 
 def super_admin_required(func):
     """Декоратор для проверки прав супер-администратора"""
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    def wrapper(update, context):
         user_id = update.message.from_user.id
         if not db.admin_manager.is_super_admin(user_id):
-            await update.message.reply_text("❌ У вас нет прав супер-администратора.")
+            update.message.reply_text("❌ У вас нет прав супер-администратора.")
             return
-        return await func(update, context)
+        return func(update, context)
     return wrapper
 
 # === Обработчики команд администратора ===
 @admin_required
-async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def admin_stats(update, context):
     """Статистика для администратора"""
     try:
         stats = db.get_stats()
@@ -126,18 +117,18 @@ async def admin_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for weapon, weapon_stats in stats['weapons'].items():
             message += f"• {weapon}: {weapon_stats['total']} (✓{weapon_stats['confirmed']} ⏳{weapon_stats['pending']})\n"
 
-        await update.message.reply_text(message, parse_mode='Markdown')
+        update.message.reply_text(message, parse_mode='Markdown')
         logger.info(f"Админ {update.message.from_user.id} запросил статистику")
         
     except Exception as e:
         logger.error(f"Ошибка в admin_stats: {e}")
-        await update.message.reply_text("❌ Ошибка при получении статистики")
+        update.message.reply_text("❌ Ошибка при получении статистики")
 
 @super_admin_required
-async def admin_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def admin_add(update, context):
     """Добавление администратора"""
     if not context.args:
-        await update.message.reply_text("Использование: /admin_add <telegram_id> <role=moderator>")
+        update.message.reply_text("Использование: /admin_add <telegram_id> <role=moderator>")
         return
 
     try:
@@ -145,7 +136,7 @@ async def admin_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         role = context.args[1] if len(context.args) > 1 else 'moderator'
 
         if role not in ['admin', 'moderator']:
-            await update.message.reply_text("Роль должна быть 'admin' или 'moderator'")
+            update.message.reply_text("Роль должна быть 'admin' или 'moderator'")
             return
 
         user = update.message.from_user
@@ -158,25 +149,25 @@ async def admin_add(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if result:
-            await update.message.reply_text(f"✅ Администратор {telegram_id} добавлен с ролью '{role}'")
+            update.message.reply_text(f"✅ Администратор {telegram_id} добавлен с ролью '{role}'")
             logger.info(f"Админ {user.id} добавил администратора {telegram_id} с ролью {role}")
         else:
-            await update.message.reply_text("❌ Не удалось добавить администратора (возможно, уже существует)")
+            update.message.reply_text("❌ Не удалось добавить администратора (возможно, уже существует)")
 
     except ValueError:
-        await update.message.reply_text("❌ Неверный формат ID")
+        update.message.reply_text("❌ Неверный формат ID")
     except Exception as e:
         logger.error(f"Ошибка при добавлении админа: {e}")
-        await update.message.reply_text("⚠️ Ошибка при добавлении администратора")
+        update.message.reply_text("⚠️ Ошибка при добавлении администратора")
 
 @super_admin_required
-async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def admin_list(update, context):
     """Список администраторов"""
     try:
         admins = db.admin_manager.get_all_admins()
 
         if not admins:
-            await update.message.reply_text("Нет активных администраторов")
+            update.message.reply_text("Нет активных администраторов")
             return
 
         message = "👥 *Список администраторов:*\n\n"
@@ -187,18 +178,18 @@ async def admin_list(update: Update, context: ContextTypes.DEFAULT_TYPE):
             message += f"   Имя: {admin.full_name or 'Не указано'}\n"
             message += f"   С: {admin.created_at.strftime('%d.%m.%Y')}\n\n"
 
-        await update.message.reply_text(message, parse_mode='Markdown')
+        update.message.reply_text(message, parse_mode='Markdown')
         logger.info(f"Админ {update.message.from_user.id} запросил список администраторов")
         
     except Exception as e:
         logger.error(f"Ошибка в admin_list: {e}")
-        await update.message.reply_text("❌ Ошибка при получении списка администраторов")
+        update.message.reply_text("❌ Ошибка при получении списка администраторов")
 
 @admin_required
-async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def admin_broadcast(update, context):
     """Рассылка сообщения всем участникам"""
     if not context.args:
-        await update.message.reply_text("Использование: /broadcast <сообщение>")
+        update.message.reply_text("Использование: /broadcast <сообщение>")
         return
 
     try:
@@ -209,11 +200,11 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
         success = 0
         failed = 0
 
-        await update.message.reply_text("🔄 Начинаю рассылку...")
+        update.message.reply_text("🔄 Начинаю рассылку...")
 
         for user_id in user_ids:
             try:
-                await context.bot.send_message(
+                context.bot.send_message(
                     user_id,
                     f"📢 *Объявление от организаторов:*\n\n{message}",
                     parse_mode='Markdown'
@@ -223,17 +214,17 @@ async def admin_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 logger.warning(f"Не удалось отправить сообщение {user_id}: {e}")
                 failed += 1
 
-        await update.message.reply_text(
+        update.message.reply_text(
             f"✅ Рассылка завершена:\n• Успешно: {success}\n• Не удалось: {failed}"
         )
         logger.info(f"Админ {update.message.from_user.id} сделал рассылку: успешно {success}, неудачно {failed}")
         
     except Exception as e:
         logger.error(f"Ошибка в рассылке: {e}")
-        await update.message.reply_text("❌ Ошибка при рассылке сообщений")
+        update.message.reply_text("❌ Ошибка при рассылке сообщений")
 
 @admin_required
-async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def admin_help(update, context):
     """Справка по командам администратора"""
     help_text = """
 🛠️ *Команды администратора:*
@@ -247,10 +238,10 @@ async def admin_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
 */admin_add <telegram_id> <role>* - добавить админа
 */admin_list* - список всех админов
 """
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    update.message.reply_text(help_text, parse_mode='Markdown')
 
 # === Диалог регистрации ===
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def start(update, context):
     """Начало диалога регистрации"""
     try:
         user = update.message.from_user
@@ -262,14 +253,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         if existing_registrations:
             pending = [r for r in existing_registrations if r.status == 'pending']
             if pending:
-                await update.message.reply_text(
+                update.message.reply_text(
                     '⚠️ У вас есть незавершенные заявки. '
                     'Вы можете просмотреть их с помощью /myregistrations\n\n'
                     'Хотите создать новую заявку? Введите ваше ФИО:'
                 )
                 return NAME
 
-        await update.message.reply_text(
+        update.message.reply_text(
             '🤺 *Добро пожаловать в систему регистрации на соревнования по фехтованию!*\n\n'
             'Для начала регистрации введите ваше *ФИО*:',
             parse_mode='Markdown'
@@ -279,10 +270,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
     except Exception as e:
         logger.error(f"Ошибка в start: {e}")
-        await update.message.reply_text("❌ Произошла ошибка. Попробуйте позже.")
+        update.message.reply_text("❌ Произошла ошибка. Попробуйте позже.")
         return ConversationHandler.END
 
-async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def get_name(update, context):
     """Получение ФИО"""
     try:
         context.user_data['full_name'] = update.message.text
@@ -290,7 +281,7 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         keyboard = [[weapon] for weapon in Config.WEAPON_TYPES]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
 
-        await update.message.reply_text(
+        update.message.reply_text(
             'Отлично! Теперь выберите *вид оружия*:',
             parse_mode='Markdown',
             reply_markup=reply_markup
@@ -299,15 +290,15 @@ async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
     except Exception as e:
         logger.error(f"Ошибка в get_name: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте снова.")
+        update.message.reply_text("❌ Ошибка. Попробуйте снова.")
         return NAME
 
-async def get_weapon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def get_weapon(update, context):
     """Получение типа оружия"""
     try:
         weapon = update.message.text
         if weapon not in Config.WEAPON_TYPES:
-            await update.message.reply_text('Пожалуйста, выберите тип оружия из предложенных вариантов.')
+            update.message.reply_text('Пожалуйста, выберите тип оружия из предложенных вариантов.')
             return WEAPON
 
         context.user_data['weapon_type'] = weapon
@@ -315,7 +306,7 @@ async def get_weapon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         keyboard = [[category] for category in Config.CATEGORIES]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
 
-        await update.message.reply_text(
+        update.message.reply_text(
             'Выберите *категорию*:',
             parse_mode='Markdown',
             reply_markup=reply_markup
@@ -324,15 +315,15 @@ async def get_weapon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
     except Exception as e:
         logger.error(f"Ошибка в get_weapon: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте снова.")
+        update.message.reply_text("❌ Ошибка. Попробуйте снова.")
         return WEAPON
 
-async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def get_category(update, context):
     """Получение категории"""
     try:
         category = update.message.text
         if category not in Config.CATEGORIES:
-            await update.message.reply_text('Пожалуйста, выберите категорию из предложенных вариантов.')
+            update.message.reply_text('Пожалуйста, выберите категорию из предложенных вариантов.')
             return CATEGORY
 
         context.user_data['category'] = category
@@ -340,7 +331,7 @@ async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         keyboard = [[age_group] for age_group in Config.AGE_GROUPS]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
 
-        await update.message.reply_text(
+        update.message.reply_text(
             'Выберите *возрастную группу*:',
             parse_mode='Markdown',
             reply_markup=reply_markup
@@ -349,15 +340,15 @@ async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
         
     except Exception as e:
         logger.error(f"Ошибка в get_category: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте снова.")
+        update.message.reply_text("❌ Ошибка. Попробуйте снова.")
         return CATEGORY
 
-async def get_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def get_age(update, context):
     """Получение возрастной группы"""
     try:
         age_group = update.message.text
         if age_group not in Config.AGE_GROUPS:
-            await update.message.reply_text('Пожалуйста, выберите возрастную группу из предложенных вариантов.')
+            update.message.reply_text('Пожалуйста, выберите возрастную группу из предложенных вариантов.')
             return AGE
 
         context.user_data['age_group'] = age_group
@@ -365,7 +356,7 @@ async def get_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         contact_keyboard = [[KeyboardButton("📞 Поделиться контактом", request_contact=True)]]
         reply_markup = ReplyKeyboardMarkup(contact_keyboard, one_time_keyboard=True)
 
-        await update.message.reply_text(
+        update.message.reply_text(
             'Теперь нам нужен ваш *номер телефона*.\n\n'
             'Вы можете отправить его вручную или использовать кнопку ниже:',
             parse_mode='Markdown',
@@ -375,10 +366,10 @@ async def get_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
     except Exception as e:
         logger.error(f"Ошибка в get_age: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте снова.")
+        update.message.reply_text("❌ Ошибка. Попробуйте снова.")
         return AGE
 
-async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def get_phone(update, context):
     """Получение телефона"""
     try:
         if update.message.contact:
@@ -388,7 +379,7 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
         context.user_data['phone'] = phone
 
-        await update.message.reply_text(
+        update.message.reply_text(
             'Расскажите кратко о вашем *опыте в фехтовании*:\n\n'
             '(сколько лет занимаетесь, разряд, участия в соревнованиях)',
             parse_mode='Markdown'
@@ -397,10 +388,10 @@ async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         
     except Exception as e:
         logger.error(f"Ошибка в get_phone: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте снова.")
+        update.message.reply_text("❌ Ошибка. Попробуйте снова.")
         return PHONE
 
-async def get_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def get_experience(update, context):
     """Получение информации об опыте"""
     try:
         context.user_data['experience'] = update.message.text
@@ -422,15 +413,15 @@ async def get_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         keyboard = [['✅ Да, отправить заявку', '❌ Нет, исправить']]
         reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
 
-        await update.message.reply_text(summary, parse_mode='Markdown', reply_markup=reply_markup)
+        update.message.reply_text(summary, parse_mode='Markdown', reply_markup=reply_markup)
         return CONFIRM
         
     except Exception as e:
         logger.error(f"Ошибка в get_experience: {e}")
-        await update.message.reply_text("❌ Ошибка. Попробуйте снова.")
+        update.message.reply_text("❌ Ошибка. Попробуйте снова.")
         return EXPERIENCE
 
-async def confirm_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def confirm_registration(update, context):
     """Подтверждение и сохранение регистрации"""
     try:
         if update.message.text == '✅ Да, отправить заявку':
@@ -447,7 +438,7 @@ async def confirm_registration(update: Update, context: ContextTypes.DEFAULT_TYP
 
             registration = db.add_registration(registration_data)
 
-            await update.message.reply_text(
+            update.message.reply_text(
                 '🎉 *Ваша заявка успешно отправлена!*\n\n'
                 'Мы свяжемся с вами для подтверждения участия. '
                 'Следите за обновлениями в этом чате.\n\n'
@@ -457,7 +448,7 @@ async def confirm_registration(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             logger.info(f"Новая заявка #{registration.id} от пользователя {context.user_data['telegram_id']}")
         else:
-            await update.message.reply_text(
+            update.message.reply_text(
                 'Давайте начнем регистрацию заново. Введите ваше ФИО:',
                 reply_markup=None
             )
@@ -467,15 +458,15 @@ async def confirm_registration(update: Update, context: ContextTypes.DEFAULT_TYP
         
     except Exception as e:
         logger.error(f"Ошибка в confirm_registration: {e}")
-        await update.message.reply_text("❌ Ошибка при сохранении заявки. Попробуйте позже.")
+        update.message.reply_text("❌ Ошибка при сохранении заявки. Попробуйте позже.")
         return ConversationHandler.END
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+def cancel(update, context):
     """Отмена регистрации"""
     user_id = update.message.from_user.id
     context.user_data.clear()
     
-    await update.message.reply_text(
+    update.message.reply_text(
         '❌ Регистрация отменена.\n\n'
         'Если захотите зарегистрироваться, отправьте /start\n'
         'Для просмотра ваших заявок - /myregistrations',
@@ -484,14 +475,14 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     logger.info(f"Пользователь {user_id} отменил регистрацию")
     return ConversationHandler.END
 
-async def view_registrations(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def view_registrations(update, context):
     """Просмотр своих заявок"""
     try:
         telegram_id = update.message.from_user.id
         registrations = db.get_user_registrations(telegram_id)
 
         if not registrations:
-            await update.message.reply_text('📭 У вас нет активных заявок.')
+            update.message.reply_text('📭 У вас нет активных заявок.')
             return
 
         message = "📝 *Ваши заявки:*\n\n"
@@ -513,16 +504,16 @@ async def view_registrations(update: Update, context: ContextTypes.DEFAULT_TYPE)
 ---
 """
 
-        await update.message.reply_text(message, parse_mode='Markdown')
+        update.message.reply_text(message, parse_mode='Markdown')
         logger.info(f"Пользователь {telegram_id} запросил список заявок")
         
     except Exception as e:
         logger.error(f"Ошибка в view_registrations: {e}")
-        await update.message.reply_text("❌ Ошибка при получении заявок.")
+        update.message.reply_text("❌ Ошибка при получении заявок.")
 
-async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def unknown_command(update, context):
     """Обработка неизвестных команд"""
-    await update.message.reply_text(
+    update.message.reply_text(
         "❌ Неизвестная команда.\n\n"
         "*Доступные команды:*\n"
         "/start - начать регистрацию\n"
@@ -649,6 +640,43 @@ def admin():
         logger.error(f"Ошибка в админке: {e}")
         return f"Ошибка при загрузке админки: {str(e)}", 500
 
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Вебхук для Telegram"""
+    if updater is None:
+        return 'Bot not initialized', 500
+        
+    try:
+        update = Update.de_json(request.get_json(force=True), updater.bot)
+        dispatcher.process_update(update)
+        return 'ok'
+    except Exception as e:
+        logger.error(f"Ошибка в обработке вебхука: {e}")
+        return 'error', 500
+
+@app.route('/set_webhook', methods=['GET'])
+def set_webhook():
+    """Установка вебхука"""
+    try:
+        webhook_url = app.config['WEBHOOK_URL']
+        if not webhook_url:
+            return "WEBHOOK_URL not configured", 400
+
+        if updater is None:
+            return "Bot not initialized", 500
+
+        result = updater.bot.set_webhook(webhook_url)
+        if result:
+            logger.info(f"Webhook установлен: {webhook_url}")
+            return f"✅ Webhook успешно установлен на {webhook_url}"
+        else:
+            logger.error("Ошибка при установке вебхука")
+            return "❌ Ошибка при установке вебхука", 500
+            
+    except Exception as e:
+        logger.exception("Ошибка при установке вебхука")
+        return f"❌ Ошибка: {str(e)}", 500
+
 @app.route('/health')
 def health_check():
     """Проверка здоровья приложения"""
@@ -658,7 +686,7 @@ def health_check():
         return jsonify({
             "status": "healthy",
             "database": "connected",
-            "bot_initialized": bot_app is not None
+            "bot_initialized": updater is not None
         })
     except Exception as e:
         logger.error(f"Health check failed: {e}")
@@ -668,21 +696,26 @@ def health_check():
         }), 500
 
 # === Инициализация при запуске ===
-@app.before_first_request
 def initialize():
-    """Инициализация при первом запросе"""
-    global bot_thread
+    """Инициализация приложения"""
     if init_bot():
-        # Запускаем бота в отдельном потоке
-        bot_thread = Thread(target=run_bot, daemon=True)
-        bot_thread.start()
-        logger.info("Бот запущен в отдельном потоке")
+        logger.info("Бот успешно инициализирован")
+        
+        # Устанавливаем вебхук при старте
+        webhook_url = app.config['WEBHOOK_URL']
+        if webhook_url:
+            try:
+                updater.bot.set_webhook(webhook_url)
+                logger.info(f"Webhook установлен на: {webhook_url}")
+            except Exception as e:
+                logger.error(f"Ошибка установки вебхука: {e}")
+    else:
+        logger.error("Не удалось инициализировать бота")
+
+# Инициализируем при запуске
+initialize()
 
 # === Запуск приложения ===
 if __name__ == '__main__':
     logger.info("Запуск приложения Fencing Registration Bot")
-    if init_bot():
-        # Для локального запуска
-        bot_thread = Thread(target=run_bot, daemon=True)
-        bot_thread.start()
     app.run(host='0.0.0.0', port=5000, debug=False)
