@@ -3,3 +3,4 @@ python-telegram-bot==20.8
 SQLAlchemy==1.4.48
 gunicorn==21.2.0
 aiohttp
+psycopg2-binary==2.9.9
