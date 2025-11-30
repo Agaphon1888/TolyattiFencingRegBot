@@ -3,7 +3,7 @@ services:
     name: TolyattiFencingRegBot
     plan: free
     region: oregon
-    env: docker  # ← КЛЮЧЕВОЕ: включает Docker
+    env: docker
     buildCommand: ""
     startCommand: ""
     envVars:
