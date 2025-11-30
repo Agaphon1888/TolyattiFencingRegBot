@@ -18,6 +18,10 @@
         .nav { margin-bottom: 20px; }
         .nav a { background: #3498db; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; margin-right: 10px; }
         .nav a:hover { background: #2980b9; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; }
+        .badge-pending { background: #fff3cd; color: #856404; }
+        .badge-confirmed { background: #d1ecf1; color: #0c5460; }
+        .badge-rejected { background: #f8d7da; color: #721c24; }
     </style>
 </head>
 <body>
@@ -28,6 +32,7 @@
             <a href="/admin">Обновить</a>
             <a href="/set_webhook">Установить вебхук</a>
             <a href="/health">Проверка здоровья</a>
+            <a href="/test_data">Добавить тестовые данные</a>
         </div>
         
         <div class="stats">
@@ -35,7 +40,11 @@
             {% set pending = registrations|selectattr('status', 'equalto', 'pending')|list %}
             {% set confirmed = registrations|selectattr('status', 'equalto', 'confirmed')|list %}
             {% set rejected = registrations|selectattr('status', 'equalto', 'rejected')|list %}
-            <p>⏳ Ожидают: {{ pending|length }} | ✅ Подтверждены: {{ confirmed|length }} | ❌ Отклонены: {{ rejected|length }}</p>
+            <p>
+                <span class="badge badge-pending">⏳ Ожидают: {{ pending|length }}</span>
+                <span class="badge badge-confirmed">✅ Подтверждены: {{ confirmed|length }}</span>
+                <span class="badge badge-rejected">❌ Отклонены: {{ rejected|length }}</span>
+            </p>
         </div>
         
         <table>
@@ -49,7 +58,7 @@
                     <th>Телефон</th>
                     <th>Опыт</th>
                     <th>Статус</th>
-                    <th>Дата</th>
+                    <th>Дата регистрации</th>
                 </tr>
             </thead>
             <tbody>
@@ -60,15 +69,19 @@
                     <td>{{ r.weapon_type }}</td>
                     <td>{{ r.category }}</td>
                     <td>{{ r.age_group }}</td>
-                    <td>{{ r.phone }}</td>
+                    <td>{{ r.phone|format_phone }}</td>
                     <td title="{{ r.experience }}">{{ r.experience[:50] }}{% if r.experience|length > 50 %}...{% endif %}</td>
-                    <td class="status-{{ r.status }}">{{ r.status }}</td>
-                    <td>{{ r.created_at|float|timestamp_to_datetime|datetimeformat('%d.%m.%Y %H:%M') }}</td>
+                    <td>
+                        <span class="status-{{ r.status }} badge badge-{{ r.status }}">
+                            {{ r.status }}
+                        </span>
+                    </td>
+                    <td>{{ r.created_at|timestamp_to_datetime|datetimeformat('%d.%m.%Y %H:%M') }}</td>
                 </tr>
                 {% else %}
                 <tr>
                     <td colspan="9" style="text-align: center; padding: 20px;">
-                        📝 Нет заявок
+                        📝 Нет заявок. <a href="/test_data">Добавить тестовые данные</a>
                     </td>
                 </tr>
                 {% endfor %}
