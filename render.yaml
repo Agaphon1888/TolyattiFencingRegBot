@@ -3,9 +3,9 @@ services:
     name: TolyattiFencingRegBot
     plan: free
     region: oregon
-    env: docker  # ← вот это важно!
-    buildCommand: ""  # Dockerfile сам всё сделает
-    startCommand: ""  # не нужно, если есть CMD в Dockerfile
+    env: docker  # ← КЛЮЧЕВОЕ: включает Docker
+    buildCommand: ""
+    startCommand: ""
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
