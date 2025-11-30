@@ -1,6 +1,5 @@
 # Используем официальный стабильный образ Python 3.10
-FROM python:3.10-slim
-
+FROM python:3.13.4
 # Устанавливаем системные зависимости (включая поддержку imghdr, SSL и др.)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
