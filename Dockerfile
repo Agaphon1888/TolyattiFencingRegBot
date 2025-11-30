@@ -1,11 +1,16 @@
-# Явно указываем Python 3.12
-FROM python:3.12.8-slim
+# Используем Python 3.11 для стабильности
+FROM python:3.11-slim
 
-# Устанавливаем системные зависимости
+# Установка системных зависимостей
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        gcc \
-        g++ \
+        build-essential \
+        libssl-dev \
+        libffi-dev \
+        zlib1g-dev \
+        libjpeg-dev \
+        libpng-dev \
+        libpython3-dev \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -13,23 +18,21 @@ RUN apt-get update && \
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Устанавливаем рабочую директорию
+# Рабочая директория
 WORKDIR /app
 
-# Сначала копируем только requirements.txt для кэширования
+# Копируем зависимости и устанавливаем
 COPY requirements.txt .
-
-# Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь код проекта
+# Копируем весь код
 COPY . .
 
-# Создаем директорию для шаблонов если не существует
-RUN mkdir -p templates
+# Убедимся, что все файлы читаемы
+RUN chmod +r . -R
 
 # Экспорт порта
 EXPOSE 10000
 
-# Запуск приложения
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 app:app"]
+# Запуск через gunicorn с поддержкой async
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 1 --worker-class aiohttp.GunicornWebWorker app:app"]
