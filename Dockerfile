@@ -1,42 +1,27 @@
-# Используем стабильный образ Python 3.11 (slim — легковесный)
-FROM python:3.11-slim
+FROM python:3.12-slim
 
-# Устанавливаем системные зависимости
-# Необходимы для компиляции пакетов вроде cryptography, Pillow (если будете добавлять)
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-        build-essential \
-        libssl-dev \
-        libffi-dev \
-        zlib1g-dev \
-        libjpeg-dev \
-        libpng-dev \
-        libpython3-dev \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Настройка локали (важно для корректной работы Python)
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
-
-# Рабочая директория внутри контейнера
 WORKDIR /app
 
-# Копируем requirements.txt и устанавливаем зависимости
+# Установка системных зависимостей
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копируем зависимости
 COPY requirements.txt .
 
-# Обновляем pip и устанавливаем зависимости без кеша
-RUN pip install --upgrade pip
+# Устанавливаем Python зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем весь код проекта в контейнер
+# Копируем код приложения
 COPY . .
 
-# Делаем все файлы читаемыми (на случай проблем с правами)
-RUN chmod +r . -R
+# Создаем директории
+RUN mkdir -p templates
 
-# Экспорт порта (Render прочитает $PORT)
+# Открываем порт
 EXPOSE 10000
 
-# Запуск приложения через gunicorn с асинхронным воркером
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 1 --worker-class aiohttp.GunicornWebWorker app:app"]
+# Запускаем приложение с СИНХРОННЫМ воркером
+CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--workers", "1", "--worker-class", "sync", "--timeout", "120", "app:app"]
