@@ -33,5 +33,5 @@ RUN chmod +r . -R
 # Экспорт порта (Render передаёт настоящий PORT через переменную окружения)
 EXPOSE 10000
 
-# Запуск приложения через gunicorn
-CMD ["gunicorn", "--bind", "0.0.0.0:$PORT", "--workers", "2", "app:app"]
+# Запуск приложения через gunicorn с интерполяцией переменной окружения
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 2 app:app"]
