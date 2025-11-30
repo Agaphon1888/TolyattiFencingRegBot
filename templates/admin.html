@@ -4,43 +4,76 @@
     <meta charset="UTF-8">
     <title>Админ-панель — Tolyatti Fencing</title>
     <style>
-        body { font-family: Arial, sans-serif; margin: 20px; }
+        body { font-family: Arial, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
         table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-        th { background-color: #f2f2f2; }
-        h1 { color: #2c3e50; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #2c3e50; color: white; }
+        tr:nth-child(even) { background-color: #f8f9fa; }
+        h1 { color: #2c3e50; margin-bottom: 20px; }
+        .stats { background: #e8f4fd; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
+        .status-pending { color: #e67e22; font-weight: bold; }
+        .status-confirmed { color: #27ae60; font-weight: bold; }
+        .status-rejected { color: #e74c3c; font-weight: bold; }
+        .nav { margin-bottom: 20px; }
+        .nav a { background: #3498db; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; margin-right: 10px; }
+        .nav a:hover { background: #2980b9; }
     </style>
 </head>
 <body>
-    <h1>📋 Заявки на участие (всего: {{ registrations|length }})</h1>
-    <a href="/admin">Обновить</a> | <a href="/set_webhook">Установить вебхук</a>
-    <table>
-        <thead>
-            <tr>
-                <th>ФИО</th>
-                <th>Оружие</th>
-                <th>Категория</th>
-                <th>Возраст</th>
-                <th>Телефон</th>
-                <th>Статус</th>
-                <th>Дата</th>
-            </tr>
-        </thead>
-        <tbody>
-            {% for r in registrations %}
-            <tr>
-                <td>{{ r.full_name }}</td>
-                <td>{{ r.weapon_type }}</td>
-                <td>{{ r.category }}</td>
-                <td>{{ r.age_group }}</td>
-                <td>{{ r.phone }}</td>
-                <td><strong>{{ r.status }}</strong></td>
-                <td>{{ r.created_at.strftime('%d.%m.%Y %H:%M') if r.created_at else '' }}</td>
-            </tr>
-            {% else %}
-            <tr><td colspan="7">Нет заявок</td></tr>
-            {% endfor %}
-        </tbody>
-    </table>
+    <div class="container">
+        <h1>🤺 Админ-панель — Tolyatti Fencing</h1>
+        
+        <div class="nav">
+            <a href="/admin">Обновить</a>
+            <a href="/set_webhook">Установить вебхук</a>
+            <a href="/health">Проверка здоровья</a>
+        </div>
+        
+        <div class="stats">
+            <h3>📊 Статистика (всего: {{ registrations|length }})</h3>
+            {% set pending = registrations|selectattr('status', 'equalto', 'pending')|list %}
+            {% set confirmed = registrations|selectattr('status', 'equalto', 'confirmed')|list %}
+            {% set rejected = registrations|selectattr('status', 'equalto', 'rejected')|list %}
+            <p>⏳ Ожидают: {{ pending|length }} | ✅ Подтверждены: {{ confirmed|length }} | ❌ Отклонены: {{ rejected|length }}</p>
+        </div>
+        
+        <table>
+            <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>ФИО</th>
+                    <th>Оружие</th>
+                    <th>Категория</th>
+                    <th>Возраст</th>
+                    <th>Телефон</th>
+                    <th>Опыт</th>
+                    <th>Статус</th>
+                    <th>Дата</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in registrations %}
+                <tr>
+                    <td>{{ r.id }}</td>
+                    <td><strong>{{ r.full_name }}</strong></td>
+                    <td>{{ r.weapon_type }}</td>
+                    <td>{{ r.category }}</td>
+                    <td>{{ r.age_group }}</td>
+                    <td>{{ r.phone }}</td>
+                    <td title="{{ r.experience }}">{{ r.experience[:50] }}{% if r.experience|length > 50 %}...{% endif %}</td>
+                    <td class="status-{{ r.status }}">{{ r.status }}</td>
+                    <td>{{ r.created_at|float|timestamp_to_datetime|datetimeformat('%d.%m.%Y %H:%M') }}</td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="9" style="text-align: center; padding: 20px;">
+                        📝 Нет заявок
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 </body>
 </html>
