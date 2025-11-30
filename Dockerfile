@@ -1,18 +1,14 @@
-# Используем официальный стабильный образ Python 3.10
-FROM python:3.13.4
-# Устанавливаем системные зависимости (включая поддержку imghdr, SSL и др.)
+# Используем официальный стабильный образ Python 3.12
+FROM python:3.12-slim
+
+# Устанавливаем системные зависимости
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         build-essential \
-        libssl-dev \
-        libffi-dev \
-        zlib1g-dev \
-        libjpeg-dev \
-        libpng-dev \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Настройка локали (чтобы избежать предупреждений)
+# Настройка локали
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
@@ -26,11 +22,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Копируем весь код проекта
 COPY . .
 
-# Убедимся, что файлы исполняемы
-RUN chmod +r . -R
+# Создаем директорию для шаблонов
+RUN mkdir -p templates
 
-# Экспорт порта (Render передаёт настоящий PORT через переменную окружения)
+# Экспорт порта
 EXPOSE 10000
 
-# Запуск приложения через gunicorn с интерполяцией переменной окружения
+# Запуск приложения через gunicorn
 CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 2 app:app"]
