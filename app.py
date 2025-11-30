@@ -1,10 +1,12 @@
 from flask import Flask, request, jsonify, render_template
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
+from telegram.error import RetryAfter, Unauthorized
 import logging
 import time
 import os
 from datetime import datetime
-import asyncio
-from threading import Thread
+import threading
 
 # === Настройка логирования ===
 logging.basicConfig(
@@ -120,129 +122,118 @@ def format_phone_filter(phone):
         return f"+7 ({clean_phone[0:3]}) {clean_phone[3:6]}-{clean_phone[6:8]}-{clean_phone[8:10]}"
     return phone
 
-# === Инициализация Telegram Bot (версия 20.x) ===
-TELEGRAM_AVAILABLE = False
-application = None
-
-try:
-    from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
-    from telegram.ext import (
-        Application, CommandHandler, MessageHandler, filters,
-        ContextTypes, ConversationHandler
-    )
-    
-    # Инициализация приложения Telegram
-    if Config.TELEGRAM_TOKEN:
-        application = Application.builder().token(Config.TELEGRAM_TOKEN).build()
-        TELEGRAM_AVAILABLE = True
-        logger.info("✅ Telegram bot инициализирован")
-    else:
-        logger.warning("⚠️ TELEGRAM_TOKEN не установлен")
-        
-except ImportError as e:
-    logger.error(f"❌ Ошибка импорта telegram библиотек: {e}")
-except Exception as e:
-    logger.error(f"❌ Ошибка инициализации бота: {e}")
-
 # === Состояния для диалога ===
 NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
 
-if TELEGRAM_AVAILABLE:
-    # === Команды бота (асинхронные для версии 20.x) ===
-    async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        user = update.effective_user
-        context.user_data.clear()
-        context.user_data['telegram_id'] = user.id
-        context.user_data['username'] = user.username
-        
-        await update.message.reply_text(
-            "🤺 Добро пожаловать в систему регистрации на соревнования по фехтованию!\n\n"
-            "Введите ваше ФИО (полностью):"
-        )
-        return NAME
+# === Инициализация бота ===
+bot = None
+dispatcher = None
 
-    async def get_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        context.user_data['full_name'] = update.message.text
-        
-        keyboard = [[weapon] for weapon in Config.WEAPON_TYPES]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-        
-        await update.message.reply_text(
-            "Выберите вид оружия:",
-            reply_markup=reply_markup
-        )
+try:
+    if Config.TELEGRAM_TOKEN:
+        bot = Bot(token=Config.TELEGRAM_TOKEN)
+        dispatcher = Dispatcher(bot, None, workers=0)
+        logger.info("✅ Telegram bot инициализирован")
+    else:
+        logger.warning("⚠️ TELEGRAM_TOKEN не установлен")
+except Exception as e:
+    logger.error(f"❌ Ошибка инициализации бота: {e}")
+
+# === Команды бота ===
+def start(update: Update, context: CallbackContext) -> int:
+    user = update.effective_user
+    context.user_data.clear()
+    context.user_data['telegram_id'] = user.id
+    context.user_data['username'] = user.username
+    
+    update.message.reply_text(
+        "🤺 Добро пожаловать в систему регистрации на соревнования по фехтованию!\n\n"
+        "Введите ваше ФИО (полностью):"
+    )
+    return NAME
+
+def get_name(update: Update, context: CallbackContext) -> int:
+    context.user_data['full_name'] = update.message.text
+    
+    keyboard = [[weapon] for weapon in Config.WEAPON_TYPES]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    
+    update.message.reply_text(
+        "Выберите вид оружия:",
+        reply_markup=reply_markup
+    )
+    return WEAPON
+
+def get_weapon(update: Update, context: CallbackContext) -> int:
+    weapon = update.message.text
+    if weapon not in Config.WEAPON_TYPES:
+        update.message.reply_text("Пожалуйста, выберите вид оружия из предложенных вариантов.")
         return WEAPON
+    
+    context.user_data['weapon_type'] = weapon
+    
+    keyboard = [[category] for category in Config.CATEGORIES]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    
+    update.message.reply_text(
+        "Выберите категорию:",
+        reply_markup=reply_markup
+    )
+    return CATEGORY
 
-    async def get_weapon(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        weapon = update.message.text
-        if weapon not in Config.WEAPON_TYPES:
-            await update.message.reply_text("Пожалуйста, выберите вид оружия из предложенных вариантов.")
-            return WEAPON
-        
-        context.user_data['weapon_type'] = weapon
-        
-        keyboard = [[category] for category in Config.CATEGORIES]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-        
-        await update.message.reply_text(
-            "Выберите категорию:",
-            reply_markup=reply_markup
-        )
+def get_category(update: Update, context: CallbackContext) -> int:
+    category = update.message.text
+    if category not in Config.CATEGORIES:
+        update.message.reply_text("Пожалуйста, выберите категорию из предложенных вариантов.")
         return CATEGORY
+    
+    context.user_data['category'] = category
+    
+    keyboard = [[age] for age in Config.AGE_GROUPS]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    
+    update.message.reply_text(
+        "Выберите возрастную группу:",
+        reply_markup=reply_markup
+    )
+    return AGE
 
-    async def get_category(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        category = update.message.text
-        if category not in Config.CATEGORIES:
-            await update.message.reply_text("Пожалуйста, выберите категорию из предложенных вариантов.")
-            return CATEGORY
-        
-        context.user_data['category'] = category
-        
-        keyboard = [[age] for age in Config.AGE_GROUPS]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-        
-        await update.message.reply_text(
-            "Выберите возрастную группу:",
-            reply_markup=reply_markup
-        )
+def get_age(update: Update, context: CallbackContext) -> int:
+    age_group = update.message.text
+    if age_group not in Config.AGE_GROUPS:
+        update.message.reply_text("Пожалуйста, выберите возрастную группу из предложенных вариантов.")
         return AGE
+    
+    context.user_data['age_group'] = age_group
+    
+    keyboard = [[KeyboardButton("📞 Отправить номер телефона", request_contact=True)]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    
+    update.message.reply_text(
+        "Поделитесь вашим номером телефона с помощью кнопки ниже:",
+        reply_markup=reply_markup
+    )
+    return PHONE
 
-    async def get_age(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        age_group = update.message.text
-        if age_group not in Config.AGE_GROUPS:
-            await update.message.reply_text("Пожалуйста, выберите возрастную группу из предложенных вариантов.")
-            return AGE
-        
-        context.user_data['age_group'] = age_group
-        
-        keyboard = [[KeyboardButton("📞 Отправить номер телефона", request_contact=True)]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-        
-        await update.message.reply_text(
-            "Поделитесь вашим номером телефона с помощью кнопки ниже:",
-            reply_markup=reply_markup
-        )
-        return PHONE
+def get_phone(update: Update, context: CallbackContext) -> int:
+    if update.message.contact:
+        phone = update.message.contact.phone_number
+    else:
+        phone = update.message.text
+    
+    context.user_data['phone'] = phone
+    
+    update.message.reply_text(
+        "Расскажите о вашем опыте в фехтовании (сколько лет занимаетесь, разряд, достижения и т.д.):"
+    )
+    return EXPERIENCE
 
-    async def get_phone(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        if update.message.contact:
-            phone = update.message.contact.phone_number
-        else:
-            phone = update.message.text
-        
-        context.user_data['phone'] = phone
-        
-        await update.message.reply_text(
-            "Расскажите о вашем опыте в фехтовании (сколько лет занимаетесь, разряд, достижения и т.д.):"
-        )
-        return EXPERIENCE
-
-    async def get_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        context.user_data['experience'] = update.message.text
-        
-        # Формируем summary
-        data = context.user_data
-        summary = f"""
+def get_experience(update: Update, context: CallbackContext) -> int:
+    context.user_data['experience'] = update.message.text
+    
+    # Формируем summary
+    data = context.user_data
+    summary = f"""
 📋 *Проверьте ваши данные:*
 
 *ФИО:* {data['full_name']}
@@ -254,56 +245,56 @@ if TELEGRAM_AVAILABLE:
 
 Всё верно?
 """
-        
-        keyboard = [["✅ Да, отправить заявку"], ["❌ Нет, заполнить заново"]]
-        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-        
-        await update.message.reply_text(summary, reply_markup=reply_markup, parse_mode='Markdown')
-        return CONFIRM
+    
+    keyboard = [["✅ Да, отправить заявку"], ["❌ Нет, заполнить заново"]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    
+    update.message.reply_text(summary, reply_markup=reply_markup, parse_mode='Markdown')
+    return CONFIRM
 
-    async def confirm_registration(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        if "да" in update.message.text.lower() or "отправить" in update.message.text:
-            # Сохраняем заявку
-            registration = db.add_registration(context.user_data)
-            
-            # Уведомляем админов
-            for admin_id in db.admins:
-                try:
-                    await application.bot.send_message(
-                        admin_id,
-                        f"📝 *Новая заявка!*\n\n"
-                        f"ФИО: {registration['full_name']}\n"
-                        f"Оружие: {registration['weapon_type']}\n"
-                        f"Категория: {registration['category']}\n"
-                        f"Телефон: {registration['phone']}",
-                        parse_mode='Markdown'
-                    )
-                except Exception as e:
-                    logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
-            
-            await update.message.reply_text(
-                "✅ *Ваша заявка отправлена!*\n\n"
-                "Администратор свяжется с вами в ближайшее время для подтверждения участия.",
-                reply_markup=None,
-                parse_mode='Markdown'
-            )
-        else:
-            await update.message.reply_text("Давайте заполним заявку заново.")
-            return await start(update, context)
+def confirm_registration(update: Update, context: CallbackContext) -> int:
+    if "да" in update.message.text.lower() or "отправить" in update.message.text:
+        # Сохраняем заявку
+        registration = db.add_registration(context.user_data)
         
-        return ConversationHandler.END
-
-    async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-        await update.message.reply_text("Регистрация отменена.", reply_markup=None)
-        return ConversationHandler.END
-
-    async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-        if not db.is_admin(update.effective_user.id):
-            await update.message.reply_text("❌ У вас нет прав для просмотра статистики.")
-            return
+        # Уведомляем админов
+        for admin_id in db.admins:
+            try:
+                bot.send_message(
+                    admin_id,
+                    f"📝 *Новая заявка!*\n\n"
+                    f"ФИО: {registration['full_name']}\n"
+                    f"Оружие: {registration['weapon_type']}\n"
+                    f"Категория: {registration['category']}\n"
+                    f"Телефон: {registration['phone']}",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить админа {admin_id}: {e}")
         
-        stats = db.get_stats()
-        message = f"""
+        update.message.reply_text(
+            "✅ *Ваша заявка отправлена!*\n\n"
+            "Администратор свяжется с вами в ближайшее время для подтверждения участия.",
+            reply_markup=None,
+            parse_mode='Markdown'
+        )
+    else:
+        update.message.reply_text("Давайте заполним заявку заново.")
+        return start(update, context)
+    
+    return ConversationHandler.END
+
+def cancel(update: Update, context: CallbackContext) -> int:
+    update.message.reply_text("Регистрация отменена.", reply_markup=None)
+    return ConversationHandler.END
+
+def stats_command(update: Update, context: CallbackContext):
+    if not db.is_admin(update.effective_user.id):
+        update.message.reply_text("❌ У вас нет прав для просмотра статистики.")
+        return
+    
+    stats = db.get_stats()
+    message = f"""
 📊 *Статистика заявок:*
 
 Всего: {stats['total']}
@@ -313,41 +304,29 @@ if TELEGRAM_AVAILABLE:
 
 *По оружию:*
 """
-        for weapon, weapon_stats in stats['weapons'].items():
-            message += f"• {weapon}: {weapon_stats['total']} (✓{weapon_stats['confirmed']})\n"
-        
-        await update.message.reply_text(message, parse_mode='Markdown')
+    for weapon, weapon_stats in stats['weapons'].items():
+        message += f"• {weapon}: {weapon_stats['total']} (✓{weapon_stats['confirmed']})\n"
+    
+    update.message.reply_text(message, parse_mode='Markdown')
 
-    # === Настройка обработчиков ===
-    def setup_handlers():
-        conv_handler = ConversationHandler(
-            entry_points=[CommandHandler('start', start)],
-            states={
-                NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-                WEAPON: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_weapon)],
-                CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_category)],
-                AGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_age)],
-                PHONE: [MessageHandler(filters.TEXT | filters.CONTACT, get_phone)],
-                EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_experience)],
-                CONFIRM: [MessageHandler(filters.TEXT & ~filters.COMMAND, confirm_registration)],
-            },
-            fallbacks=[CommandHandler('cancel', cancel)]
-        )
-        
-        application.add_handler(conv_handler)
-        application.add_handler(CommandHandler('stats', stats_command))
-
-    # Инициализация обработчиков
-    setup_handlers()
-
-    # Функция для обработки обновлений в отдельном потоке
-    def process_update(update):
-        async def _process():
-            await application.process_update(update)
-        
-        # Запускаем в отдельном потоке с event loop
-        thread = Thread(target=lambda: asyncio.run(_process()))
-        thread.start()
+# === Настройка обработчиков ===
+if bot and dispatcher:
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            NAME: [MessageHandler(Filters.text & ~Filters.command, get_name)],
+            WEAPON: [MessageHandler(Filters.text & ~Filters.command, get_weapon)],
+            CATEGORY: [MessageHandler(Filters.text & ~Filters.command, get_category)],
+            AGE: [MessageHandler(Filters.text & ~Filters.command, get_age)],
+            PHONE: [MessageHandler(Filters.text | Filters.contact, get_phone)],
+            EXPERIENCE: [MessageHandler(Filters.text & ~Filters.command, get_experience)],
+            CONFIRM: [MessageHandler(Filters.text & ~Filters.command, confirm_registration)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+    
+    dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(CommandHandler('stats', stats_command))
 
 # === Flask маршруты ===
 @app.route('/')
@@ -357,8 +336,8 @@ def home():
         "service": "TolyattiFencingRegBot",
         "registrations_count": len(db.registrations),
         "active_admins": len(db.admins),
-        "telegram_available": TELEGRAM_AVAILABLE,
-        "version": "2.0"
+        "telegram_bot": bot is not None,
+        "version": "3.0"
     })
 
 @app.route('/admin')
@@ -368,20 +347,16 @@ def admin_page():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    if not TELEGRAM_AVAILABLE:
+    if not bot or not dispatcher:
         return jsonify({"error": "Telegram bot not available"}), 500
         
-    update_data = request.get_json()
-    update = Update.de_json(update_data, application.bot)
-    
-    # Запускаем обработку в отдельном потоке
-    process_update(update)
-    
+    update = Update.de_json(request.get_json(force=True), bot)
+    dispatcher.process_update(update)
     return 'ok'
 
 @app.route('/set_webhook', methods=['GET'])
 def set_webhook():
-    if not TELEGRAM_AVAILABLE:
+    if not bot:
         return jsonify({"error": "Telegram bot not available"}), 500
         
     webhook_url = Config.WEBHOOK_URL
@@ -389,12 +364,7 @@ def set_webhook():
         return jsonify({"error": "WEBHOOK_URL не задан"}), 400
     
     try:
-        # Используем async для установки вебхука
-        async def set_webhook_async():
-            result = await application.bot.set_webhook(webhook_url)
-            return result
-            
-        result = asyncio.run(set_webhook_async())
+        result = bot.set_webhook(webhook_url)
         return jsonify({
             "status": "success" if result else "failed",
             "url": webhook_url
@@ -408,7 +378,7 @@ def health():
     return jsonify({
         "status": "healthy",
         "database_records": len(db.registrations),
-        "telegram_bot": TELEGRAM_AVAILABLE,
+        "telegram_bot": bot is not None,
         "timestamp": datetime.now().isoformat()
     })
 
@@ -451,24 +421,17 @@ def test_data():
 
 # === Инициализация при запуске ===
 def initialize_bot():
-    if TELEGRAM_AVAILABLE:
+    if bot:
         try:
-            # Инициализируем бота в фоновом режиме
-            async def start_bot():
-                await application.initialize()
-                # Устанавливаем вебхук
-                webhook_url = Config.WEBHOOK_URL
-                if webhook_url:
-                    await application.bot.set_webhook(webhook_url)
-                    logger.info(f"✅ Вебхук установлен: {webhook_url}")
-                # Не запускаем polling, т.к. используем вебхуки
-                
-            # Запускаем в отдельном потоке
-            thread = Thread(target=lambda: asyncio.run(start_bot()))
-            thread.start()
-            logger.info("✅ Telegram bot initialized")
+            # Устанавливаем вебхук
+            webhook_url = Config.WEBHOOK_URL
+            if webhook_url:
+                bot.set_webhook(webhook_url)
+                logger.info(f"✅ Вебхук установлен: {webhook_url}")
+            else:
+                logger.warning("⚠️ WEBHOOK_URL не установлен")
         except Exception as e:
-            logger.error(f"❌ Failed to initialize bot: {e}")
+            logger.error(f"❌ Ошибка инициализации бота: {e}")
 
 # Инициализируем при импорте
 initialize_bot()
