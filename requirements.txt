@@ -1,5 +1,5 @@
 Flask==2.3.3
-python-telegram-bot==20.9
+python-telegram-bot==20.8
 SQLAlchemy==1.4.48
 gunicorn==21.2.0
 aiohttp
