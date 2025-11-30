@@ -23,5 +23,5 @@ RUN mkdir -p templates
 # Открываем порт
 EXPOSE 10000
 
-# Запускаем приложение с СИНХРОННЫМ воркером
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--workers", "1", "--worker-class", "sync", "--timeout", "120", "app:app"]
+# Запускаем приложение через Waitress (синхронный WSGI сервер)
+CMD ["waitress-serve", "--host=0.0.0.0", "--port=10000", "app:app"]
