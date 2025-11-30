@@ -1,10 +1,11 @@
-# Используем официальный стабильный образ Python 3.12
-FROM python:3.12-slim
+# Явно указываем Python 3.12
+FROM python:3.12.8-slim
 
 # Устанавливаем системные зависимости
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-        build-essential \
+        gcc \
+        g++ \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -15,18 +16,20 @@ ENV LC_ALL=C.UTF-8
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем requirements.txt и устанавливаем зависимости
+# Сначала копируем только requirements.txt для кэширования
 COPY requirements.txt .
+
+# Устанавливаем зависимости
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Копируем весь код проекта
 COPY . .
 
-# Создаем директорию для шаблонов
+# Создаем директорию для шаблонов если не существует
 RUN mkdir -p templates
 
 # Экспорт порта
 EXPOSE 10000
 
-# Запуск приложения через gunicorn
-CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 2 app:app"]
+# Запуск приложения
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 app:app"]
