@@ -4,8 +4,6 @@ services:
     plan: free
     region: oregon
     env: docker
-    buildCommand: ""
-    startCommand: ""
     envVars:
       - key: TELEGRAM_TOKEN
         sync: false
@@ -17,7 +15,6 @@ services:
         fromDatabase:
           name: fencing-db
           property: connectionString
-
 databases:
   - name: fencing-db
     plan: free
