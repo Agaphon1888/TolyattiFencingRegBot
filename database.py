@@ -17,7 +17,7 @@ class Registration(Base):
     __tablename__ = 'registrations'
     id = Column(BigInteger, primary_key=True, autoincrement=True)
     telegram_id = Column(BigInteger, nullable=False)
-    username = Column(String(100))
+    username = Column(String(100))  # ✅ Добавлено
     full_name = Column(String(200), nullable=False)
     weapon_type = Column(String(50), nullable=False)
     category = Column(String(50), nullable=False)
@@ -32,7 +32,7 @@ class Registration(Base):
 class Admin(Base):
     __tablename__ = 'admins'
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    telegram_id = Column(BigInteger, unique=True, nullable=False)
+    telegram_id = Column(BigInteger, unique=True, nullable=False)  # ✅ BigInteger
     username = Column(String(100))
     full_name = Column(String(200))
     role = Column(String(50), default='moderator')
@@ -83,9 +83,14 @@ def initialize_super_admins():
     session = SessionLocal()
     try:
         for tid in admin_ids:
-            existing = session.query(Admin).filter_by(telegram_id=tid).first()
-            if not existing:
-                admin = Admin(telegram_id=tid, username='admin', full_name='Super Admin', role='admin', created_by=0)
+            if not session.query(Admin).filter_by(telegram_id=tid).first():
+                admin = Admin(
+                    telegram_id=tid,
+                    username='admin',
+                    full_name='Super Admin',
+                    role='admin',
+                    created_by=0
+                )
                 session.add(admin)
                 logger.info(f"✅ Добавлен супер-админ: {tid}")
         session.commit()
