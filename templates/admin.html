@@ -3,1215 +3,132 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Админ-панель — {{ config.WEBAPP_TITLE or 'Tolyatti Fencing' }}</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <title>Админ-панель</title>
     <style>
-        :root {
-            --primary: #3498db;
-            --primary-dark: #2980b9;
-            --secondary: #2c3e50;
-            --success: #27ae60;
-            --warning: #f39c12;
-            --danger: #e74c3c;
-            --light: #f8f9fa;
-            --dark: #343a40;
-            --gray: #6c757d;
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-            color: var(--dark);
-        }
-        
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 15px;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
-            overflow: hidden;
-        }
-        
-        /* Header */
-        .header {
-            background: linear-gradient(to right, var(--secondary), var(--dark));
-            color: white;
-            padding: 25px 30px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 20px;
-        }
-        
-        .header h1 {
-            font-size: 28px;
-            display: flex;
-            align-items: center;
-            gap: 15px;
-        }
-        
-        .header h1 i {
-            color: var(--primary);
-        }
-        
-        .user-info {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            background: rgba(255,255,255,0.1);
-            padding: 10px 15px;
-            border-radius: 8px;
-        }
-        
-        .user-id {
-            font-weight: bold;
-            color: var(--primary);
-        }
-        
-        /* Navigation */
-        .nav {
-            background: var(--light);
-            padding: 15px 30px;
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            border-bottom: 1px solid #dee2e6;
-        }
-        
-        .nav a {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: white;
-            color: var(--dark);
-            padding: 10px 20px;
-            text-decoration: none;
-            border-radius: 8px;
-            border: 1px solid #dee2e6;
-            transition: all 0.3s;
-            font-weight: 500;
-        }
-        
-        .nav a:hover {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-            transform: translateY(-2px);
-            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
-        }
-        
-        .nav a.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        /* Main Content */
-        .content {
-            padding: 30px;
-        }
-        
-        /* Stats Cards */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        
-        .stat-card {
-            background: white;
-            border-radius: 10px;
-            padding: 20px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            border-left: 5px solid var(--primary);
-            transition: transform 0.3s;
-        }
-        
-        .stat-card:hover {
-            transform: translateY(-5px);
-        }
-        
-        .stat-card.pending { border-left-color: var(--warning); }
-        .stat-card.confirmed { border-left-color: var(--success); }
-        .stat-card.rejected { border-left-color: var(--danger); }
-        
-        .stat-card .stat-title {
-            font-size: 14px;
-            color: var(--gray);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 10px;
-        }
-        
-        .stat-card .stat-value {
-            font-size: 32px;
-            font-weight: bold;
-            color: var(--dark);
-        }
-        
-        .stat-card .stat-icon {
-            font-size: 40px;
-            margin-top: 10px;
-            opacity: 0.2;
-        }
-        
-        /* Filters */
-        .filters {
-            background: var(--light);
-            padding: 20px;
-            border-radius: 10px;
-            margin-bottom: 25px;
-        }
-        
-        .filters h3 {
-            margin-bottom: 15px;
-            color: var(--secondary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .filter-buttons {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-        
-        .filter-btn {
-            padding: 10px 20px;
-            border: 2px solid #dee2e6;
-            background: white;
-            border-radius: 25px;
-            cursor: pointer;
-            font-weight: 500;
-            transition: all 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .filter-btn.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .filter-btn:hover:not(.active) {
-            border-color: var(--primary);
-            color: var(--primary);
-        }
-        
-        .search-box {
-            position: relative;
-        }
-        
-        .search-box i {
-            position: absolute;
-            left: 15px;
-            top: 50%;
-            transform: translateY(-50%);
-            color: var(--gray);
-        }
-        
-        .search-box input {
-            width: 100%;
-            padding: 12px 20px 12px 45px;
-            border: 2px solid #dee2e6;
-            border-radius: 25px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        
-        .search-box input:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-        
-        /* Table */
-        .table-container {
-            overflow-x: auto;
-            border-radius: 10px;
-            box-shadow: 0 5px 15px rgba(0,0,0,0.08);
-            margin-bottom: 30px;
-        }
-        
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            min-width: 1000px;
-        }
-        
-        thead {
-            background: linear-gradient(to right, var(--secondary), var(--dark));
-            color: white;
-        }
-        
-        th {
-            padding: 15px;
-            text-align: left;
-            font-weight: 600;
-            position: sticky;
-            top: 0;
-        }
-        
-        td {
-            padding: 12px 15px;
-            border-bottom: 1px solid #dee2e6;
-        }
-        
-        tbody tr {
-            transition: background-color 0.2s;
-        }
-        
-        tbody tr:hover {
-            background-color: rgba(52, 152, 219, 0.05);
-        }
-        
-        tbody tr:nth-child(even) {
-            background-color: #f8f9fa;
-        }
-        
-        tbody tr:nth-child(even):hover {
-            background-color: rgba(52, 152, 219, 0.08);
-        }
-        
-        /* Badges */
-        .badge {
-            display: inline-block;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: bold;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-        
-        .badge-pending {
-            background: #fff3cd;
-            color: #856404;
-        }
-        
-        .badge-confirmed {
-            background: #d4edda;
-            color: #155724;
-        }
-        
-        .badge-rejected {
-            background: #f8d7da;
-            color: #721c24;
-        }
-        
-        /* Actions */
-        .actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-        
-        .btn {
-            padding: 6px 12px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 12px;
-            font-weight: 500;
-            transition: all 0.2s;
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-        }
-        
-        .btn-sm {
-            padding: 4px 8px;
-            font-size: 11px;
-        }
-        
-        .btn-confirm {
-            background: var(--success);
-            color: white;
-        }
-        
-        .btn-confirm:hover {
-            background: #218838;
-        }
-        
-        .btn-reject {
-            background: var(--danger);
-            color: white;
-        }
-        
-        .btn-reject:hover {
-            background: #c82333;
-        }
-        
-        .btn-view {
-            background: var(--primary);
-            color: white;
-        }
-        
-        .btn-view:hover {
-            background: var(--primary-dark);
-        }
-        
-        /* Pagination */
-        .pagination {
-            display: flex;
-            justify-content: center;
-            gap: 10px;
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid #dee2e6;
-        }
-        
-        .page-btn {
-            padding: 8px 16px;
-            border: 1px solid #dee2e6;
-            background: white;
-            border-radius: 4px;
-            cursor: pointer;
-            transition: all 0.3s;
-        }
-        
-        .page-btn.active {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        .page-btn:hover:not(.active) {
-            background: var(--light);
-        }
-        
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 60px 20px;
-            color: var(--gray);
-        }
-        
-        .empty-state i {
-            font-size: 60px;
-            margin-bottom: 20px;
-            opacity: 0.5;
-        }
-        
-        .empty-state h3 {
-            margin-bottom: 10px;
-            color: var(--dark);
-        }
-        
-        /* Mobile */
-        @media (max-width: 768px) {
-            body { padding: 10px; }
-            .header { padding: 20px; text-align: center; justify-content: center; }
-            .header h1 { font-size: 24px; }
-            .content { padding: 20px; }
-            .stats-grid { grid-template-columns: 1fr; }
-            .nav { justify-content: center; }
-            .nav a { flex: 1; min-width: 200px; justify-content: center; }
-            th, td { padding: 10px; }
-        }
-        
-        /* Token Info */
-        .token-info {
-            background: #e8f4fd;
-            padding: 15px;
-            border-radius: 8px;
-            margin-top: 20px;
-            font-size: 14px;
-            border-left: 4px solid var(--primary);
-        }
-        
-        .token-info code {
-            background: white;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-family: monospace;
-            color: var(--danger);
-        }
-        
-        /* Loader */
-        .loader {
-            display: none;
-            text-align: center;
-            padding: 40px;
-            color: var(--gray);
-        }
-        
-        .loader i {
-            font-size: 40px;
-            margin-bottom: 20px;
-            animation: spin 1s linear infinite;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        
-        /* Quick Actions */
-        .quick-actions {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 20px;
-            flex-wrap: wrap;
-        }
-        
-        .quick-btn {
-            padding: 10px 20px;
-            background: var(--light);
-            border: 2px solid #dee2e6;
-            border-radius: 8px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.3s;
-        }
-        
-        .quick-btn:hover {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        
-        /* Export Section */
-        .export-section {
-            background: #f8f9fa;
-            padding: 20px;
-            border-radius: 10px;
-            margin-top: 30px;
-            text-align: center;
-        }
-        
-        .export-buttons {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-            margin-top: 15px;
-            flex-wrap: wrap;
-        }
-        
-        .export-btn {
-            padding: 10px 20px;
-            background: white;
-            border: 2px solid #dee2e6;
-            border-radius: 8px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            transition: all 0.3s;
-        }
-        
-        .export-btn:hover {
-            background: var(--success);
-            color: white;
-            border-color: var(--success);
-        }
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        h1 { color: #333; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+        th { background-color: #4CAF50; color: white; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+        .pending { background: #ffc107; color: #000; }
+        .confirmed { background: #28a745; color: white; }
+        .rejected { background: #dc3545; color: white; }
     </style>
 </head>
 <body>
-    <div class="container">
-        <!-- Header -->
-        <div class="header">
-            <h1><i class="fas fa-shield-alt"></i> Админ-панель — Tolyatti Fencing</h1>
-            {% if current_admin_id %}
-            <div class="user-info">
-                <i class="fas fa-user-shield"></i>
-                <span>Администратор ID: <span class="user-id">{{ current_admin_id }}</span></span>
-            </div>
-            {% endif %}
-        </div>
-        
-        <!-- Navigation -->
-        <div class="nav">
-            <a href="/admin_panel?token={{ token }}" class="active">
-                <i class="fas fa-sync-alt"></i> Обновить
-            </a>
-            <a href="/set_webhook">
-                <i class="fas fa-cog"></i> Вебхук
-            </a>
-            <a href="/health">
-                <i class="fas fa-heartbeat"></i> Здоровье
-            </a>
-            <a href="/test_data">
-                <i class="fas fa-vial"></i> Тест данные
-            </a>
-            <a href="/config">
-                <i class="fas fa-sliders-h"></i> Конфиг
-            </a>
-        </div>
-        
-        <!-- Main Content -->
-        <div class="content">
-            <!-- Stats -->
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-title">Всего заявок</div>
-                    <div class="stat-value">{{ registrations|length }}</div>
-                    <div class="stat-icon"><i class="fas fa-file-alt"></i></div>
-                </div>
-                <div class="stat-card pending">
-                    <div class="stat-title">Ожидают</div>
-                    <div class="stat-value">{{ registrations|selectattr('status', 'equalto', 'pending')|list|length }}</div>
-                    <div class="stat-icon"><i class="fas fa-clock"></i></div>
-                </div>
-                <div class="stat-card confirmed">
-                    <div class="stat-title">Подтверждены</div>
-                    <div class="stat-value">{{ registrations|selectattr('status', 'equalto', 'confirmed')|list|length }}</div>
-                    <div class="stat-icon"><i class="fas fa-check-circle"></i></div>
-                </div>
-                <div class="stat-card rejected">
-                    <div class="stat-title">Отклонены</div>
-                    <div class="stat-value">{{ registrations|selectattr('status', 'equalto', 'rejected')|list|length }}</div>
-                    <div class="stat-icon"><i class="fas fa-times-circle"></i></div>
-                </div>
-            </div>
-            
-            <!-- Quick Actions -->
-            <div class="quick-actions">
-                <button class="quick-btn" onclick="refreshData()">
-                    <i class="fas fa-sync-alt"></i> Обновить данные
-                </button>
-                <button class="quick-btn" onclick="exportCSV()">
-                    <i class="fas fa-download"></i> Экспорт CSV
-                </button>
-                <button class="quick-btn" onclick="showAll()">
-                    <i class="fas fa-eye"></i> Показать все
-                </button>
-                <button class="quick-btn" onclick="showPending()">
-                    <i class="fas fa-clock"></i> Только ожидающие
-                </button>
-            </div>
-            
-            <!-- Filters -->
-            <div class="filters">
-                <h3><i class="fas fa-filter"></i> Фильтры и поиск</h3>
-                <div class="filter-buttons">
-                    <button class="filter-btn active" onclick="filterTable('all')">
-                        <i class="fas fa-list"></i> Все ({{ registrations|length }})
-                    </button>
-                    <button class="filter-btn" onclick="filterTable('pending')">
-                        <i class="fas fa-clock"></i> Ожидают ({{ registrations|selectattr('status', 'equalto', 'pending')|list|length }})
-                    </button>
-                    <button class="filter-btn" onclick="filterTable('confirmed')">
-                        <i class="fas fa-check-circle"></i> Подтверждены ({{ registrations|selectattr('status', 'equalto', 'confirmed')|list|length }})
-                    </button>
-                    <button class="filter-btn" onclick="filterTable('rejected')">
-                        <i class="fas fa-times-circle"></i> Отклонены ({{ registrations|selectattr('status', 'equalto', 'rejected')|list|length }})
-                    </button>
-                </div>
-                <div class="search-box">
-                    <i class="fas fa-search"></i>
-                    <input type="text" id="searchInput" 
-                           placeholder="Поиск по ФИО, телефону, ID или оружию..." 
-                           onkeyup="searchTable()">
-                </div>
-            </div>
-            
-            <!-- Table -->
-            <div class="table-container">
-                <table id="registrationsTable">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>ФИО</th>
-                            <th>Оружие</th>
-                            <th>Категория</th>
-                            <th>Возраст</th>
-                            <th>Телефон</th>
-                            <th>Опыт</th>
-                            <th>Статус</th>
-                            <th>Дата регистрации</th>
-                            <th>Действия</th>
-                        </tr>
-                    </thead>
-                    <tbody id="tableBody">
-                        {% for r in registrations %}
-                        <tr class="status-{{ r.status }}" data-id="{{ r.id }}">
-                            <td><strong>{{ r.id }}</strong></td>
-                            <td>
-                                <div class="user-name">{{ r.full_name }}</div>
-                                {% if r.username %}
-                                <div class="user-username"><small>@{{ r.username }}</small></div>
-                                {% endif %}
-                            </td>
-                            <td>{{ r.weapon_type }}</td>
-                            <td>{{ r.category }}</td>
-                            <td>{{ r.age_group }}</td>
-                            <td>{{ r.phone|format_phone }}</td>
-                            <td title="{{ r.experience }}">
-                                <div class="experience-text">
-                                    {{ r.experience[:50] }}{% if r.experience|length > 50 %}...{% endif %}
-                                </div>
-                            </td>
-                            <td>
-                                <span class="badge badge-{{ r.status }}">
-                                    {{ r.status|status_icon }} 
-                                    {% if r.status == 'pending' %}Ожидает
-                                    {% elif r.status == 'confirmed' %}Подтверждена
-                                    {% else %}Отклонена{% endif %}
-                                </span>
-                            </td>
-                            <td>{{ r.created_at|datetimeformat('%d.%m.%Y %H:%M') }}</td>
-                            <td>
-                                <div class="actions">
-                                    {% if r.status == 'pending' %}
-                                    <button class="btn btn-confirm btn-sm" onclick="confirmRegistration({{ r.id }})">
-                                        <i class="fas fa-check"></i>
-                                    </button>
-                                    <button class="btn btn-reject btn-sm" onclick="rejectRegistration({{ r.id }})">
-                                        <i class="fas fa-times"></i>
-                                    </button>
-                                    {% endif %}
-                                    <button class="btn btn-view btn-sm" onclick="viewDetails({{ r.id }})" 
-                                            title="Просмотр деталей">
-                                        <i class="fas fa-eye"></i>
-                                    </button>
-                                </div>
-                            </td>
-                        </tr>
-                        {% else %}
-                        <tr>
-                            <td colspan="10">
-                                <div class="empty-state">
-                                    <i class="fas fa-inbox"></i>
-                                    <h3>Нет заявок</h3>
-                                    <p>Здесь появятся заявки участников на соревнования.</p>
-                                    <p style="margin-top: 15px;">
-                                        <a href="/test_data" style="color: var(--primary); text-decoration: none;">
-                                            <i class="fas fa-vial"></i> Добавить тестовые данные
-                                        </a>
-                                    </p>
-                                </div>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            
-            <!-- Loader -->
-            <div class="loader" id="loader">
-                <i class="fas fa-spinner"></i>
-                <div>Загрузка...</div>
-            </div>
-            
-            <!-- Token Info -->
-            {% if token %}
-            <div class="token-info">
-                <i class="fas fa-key"></i>
-                <strong>Токен доступа:</strong> 
-                <code>{{ token[:20] }}...</code>
-                <span style="color: var(--gray); font-size: 13px;">
-                    (действителен до {{ (now + timedelta(seconds=config.ADMIN_TOKEN_EXPIRE))|datetimeformat('%H:%M') }})
-                </span>
-            </div>
-            {% endif %}
-            
-            <!-- Export Section -->
-            <div class="export-section">
-                <h3><i class="fas fa-download"></i> Экспорт данных</h3>
-                <p>Вы можете экспортировать данные в различных форматах</p>
-                <div class="export-buttons">
-                    <button class="export-btn" onclick="exportCSV()">
-                        <i class="fas fa-file-csv"></i> CSV
-                    </button>
-                    <button class="export-btn" onclick="exportJSON()">
-                        <i class="fas fa-file-code"></i> JSON
-                    </button>
-                    <button class="export-btn" onclick="printTable()">
-                        <i class="fas fa-print"></i> Печать
-                    </button>
-                </div>
-            </div>
-        </div>
+    <h1>🤺 Админ-панель Tolyatti Fencing</h1>
+    
+    <div id="stats">
+        <h3>📊 Статистика</h3>
+        <p><strong>Всего заявок:</strong> <span id="total">0</span></p>
+        <p><strong>Ожидают рассмотрения:</strong> <span id="pending">0</span></p>
     </div>
     
-    <!-- JavaScript -->
+    <h3>Заявки</h3>
+    <div id="registrations">
+        <p>Загрузка...</p>
+    </div>
+    
     <script>
-        // Глобальные переменные
-        let currentFilter = 'all';
-        let allRegistrations = {{ registrations|tojson|safe }};
-        
-        // Фильтрация таблицы
-        function filterTable(status) {
-            currentFilter = status;
-            const rows = document.querySelectorAll('#tableBody tr');
-            const buttons = document.querySelectorAll('.filter-btn');
-            
-            // Обновляем активную кнопку
-            buttons.forEach(btn => btn.classList.remove('active'));
-            event.target.classList.add('active');
-            
-            // Фильтруем строки
-            rows.forEach(row => {
-                if (row.querySelector('.empty-state')) return;
-                
-                if (status === 'all') {
-                    row.style.display = '';
-                } else if (row.classList.contains('status-' + status)) {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                }
-            });
-            
-            // Применяем поиск если есть текст в поиске
-            const searchInput = document.getElementById('searchInput');
-            if (searchInput.value) {
-                searchTable();
-            }
-        }
-        
-        // Поиск по таблице
-        function searchTable() {
-            const input = document.getElementById('searchInput');
-            const filter = input.value.toLowerCase();
-            const rows = document.querySelectorAll('#tableBody tr');
-            
-            rows.forEach(row => {
-                if (row.querySelector('.empty-state')) return;
-                if (row.style.display === 'none' && currentFilter !== 'all') return;
-                
-                const text = row.textContent.toLowerCase();
-                const shouldShow = text.includes(filter) && 
-                    (currentFilter === 'all' || row.classList.contains('status-' + currentFilter));
-                
-                row.style.display = shouldShow ? '' : 'none';
-            });
-        }
-        
-        // Подтверждение заявки
-        async function confirmRegistration(id) {
-            if (!confirm('Подтвердить эту заявку?')) return;
-            
-            showLoader();
-            
+        async function loadData() {
             try {
-                const response = await fetch(`/api/registrations/${id}/confirm?token={{ token }}`, {
-                    method: 'POST'
+                const token = new URLSearchParams(window.location.search).get('token');
+                if (!token) {
+                    document.getElementById('registrations').innerHTML = 
+                        '<p style="color: red;">Ошибка: отсутствует токен доступа</p>';
+                    return;
+                }
+                
+                const response = await fetch(`/api/registrations?token=${token}`);
+                const data = await response.json();
+                
+                if (data.error) {
+                    document.getElementById('registrations').innerHTML = 
+                        `<p style="color: red;">Ошибка: ${data.error}</p>`;
+                    return;
+                }
+                
+                // Статистика
+                const total = data.count || 0;
+                const pending = data.registrations.filter(r => r.status === 'pending').length;
+                document.getElementById('total').textContent = total;
+                document.getElementById('pending').textContent = pending;
+                
+                // Таблица
+                if (data.registrations.length === 0) {
+                    document.getElementById('registrations').innerHTML = 
+                        '<p>Нет заявок</p>';
+                    return;
+                }
+                
+                let html = `<table>
+                    <tr>
+                        <th>ID</th><th>ФИО</th><th>Оружие</th><th>Статус</th><th>Действия</th>
+                    </tr>`;
+                
+                data.registrations.forEach(reg => {
+                    const statusClass = reg.status;
+                    const statusText = reg.status === 'pending' ? '⏳ Ожидает' : 
+                                     reg.status === 'confirmed' ? '✅ Подтверждена' : '❌ Отклонена';
+                    
+                    html += `<tr>
+                        <td>${reg.id}</td>
+                        <td>${reg.full_name}</td>
+                        <td>${reg.weapon_type}</td>
+                        <td><span class="badge ${statusClass}">${statusText}</span></td>
+                        <td>
+                            ${reg.status === 'pending' ? 
+                                `<button onclick="confirmReg(${reg.id})">✅</button>
+                                 <button onclick="rejectReg(${reg.id})">❌</button>` : 
+                                ''}
+                            <button onclick="viewDetails(${reg.id})">👁️</button>
+                        </td>
+                    </tr>`;
                 });
                 
-                if (response.ok) {
-                    const data = await response.json();
-                    updateRowStatus(id, 'confirmed');
-                    showNotification('✅ Заявка подтверждена!', 'success');
-                } else {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Ошибка сервера');
-                }
-            } catch (error) {
-                showNotification('❌ Ошибка: ' + error.message, 'error');
-            } finally {
-                hideLoader();
-            }
-        }
-        
-        // Отклонение заявки
-        async function rejectRegistration(id) {
-            if (!confirm('Отклонить эту заявку?')) return;
-            
-            showLoader();
-            
-            try {
-                const response = await fetch(`/api/registrations/${id}/reject?token={{ token }}`, {
-                    method: 'POST'
-                });
+                html += '</table>';
+                document.getElementById('registrations').innerHTML = html;
                 
-                if (response.ok) {
-                    const data = await response.json();
-                    updateRowStatus(id, 'rejected');
-                    showNotification('❌ Заявка отклонена!', 'error');
-                } else {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Ошибка сервера');
-                }
             } catch (error) {
-                showNotification('❌ Ошибка: ' + error.message, 'error');
-            } finally {
-                hideLoader();
+                document.getElementById('registrations').innerHTML = 
+                    `<p style="color: red;">Ошибка загрузки: ${error.message}</p>`;
             }
         }
         
-        // Обновление статуса строки
-        function updateRowStatus(id, status) {
-            const row = document.querySelector(`tr[data-id="${id}"]`);
-            if (!row) return;
-            
-            // Обновляем класс
-            row.className = `status-${status}`;
-            
-            // Обновляем бейдж
-            const badge = row.querySelector('.badge');
-            badge.className = `badge badge-${status}`;
-            
-            let statusText = 'Ожидает';
-            let icon = '⏳';
-            
-            if (status === 'confirmed') {
-                statusText = 'Подтверждена';
-                icon = '✅';
-            } else if (status === 'rejected') {
-                statusText = 'Отклонена';
-                icon = '❌';
-            }
-            
-            badge.innerHTML = `${icon} ${statusText}`;
-            
-            // Обновляем кнопки действий
-            const actionsCell = row.querySelector('.actions');
-            if (status === 'pending') {
-                actionsCell.innerHTML = `
-                    <button class="btn btn-confirm btn-sm" onclick="confirmRegistration(${id})">
-                        <i class="fas fa-check"></i>
-                    </button>
-                    <button class="btn btn-reject btn-sm" onclick="rejectRegistration(${id})">
-                        <i class="fas fa-times"></i>
-                    </button>
-                    <button class="btn btn-view btn-sm" onclick="viewDetails(${id})" title="Просмотр деталей">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                `;
+        async function confirmReg(id) {
+            const token = new URLSearchParams(window.location.search).get('token');
+            const response = await fetch(`/api/registrations/${id}/confirm?token=${token}`, {
+                method: 'POST'
+            });
+            if (response.ok) {
+                alert('Заявка подтверждена');
+                loadData();
             } else {
-                actionsCell.innerHTML = `
-                    <button class="btn btn-view btn-sm" onclick="viewDetails(${id})" title="Просмотр деталей">
-                        <i class="fas fa-eye"></i>
-                    </button>
-                `;
+                alert('Ошибка подтверждения');
             }
         }
         
-        // Просмотр деталей
+        async function rejectReg(id) {
+            const token = new URLSearchParams(window.location.search).get('token');
+            const response = await fetch(`/api/registrations/${id}/reject?token=${token}`, {
+                method: 'POST'
+            });
+            if (response.ok) {
+                alert('Заявка отклонена');
+                loadData();
+            } else {
+                alert('Ошибка отклонения');
+            }
+        }
+        
         function viewDetails(id) {
-            const reg = allRegistrations.find(r => r.id === id);
-            if (!reg) return;
-            
-            const details = `
-                <div style="text-align: left;">
-                    <h3>Заявка #${reg.id}</h3>
-                    <p><strong>ФИО:</strong> ${reg.full_name}</p>
-                    <p><strong>Оружие:</strong> ${reg.weapon_type}</p>
-                    <p><strong>Категория:</strong> ${reg.category}</p>
-                    <p><strong>Возрастная группа:</strong> ${reg.age_group}</p>
-                    <p><strong>Телефон:</strong> ${reg.phone}</p>
-                    <p><strong>Статус:</strong> ${reg.status === 'pending' ? '⏳ Ожидает' : reg.status === 'confirmed' ? '✅ Подтверждена' : '❌ Отклонена'}</p>
-                    <p><strong>Дата регистрации:</strong> ${new Date(reg.created_at).toLocaleString('ru-RU')}</p>
-                    <p><strong>Опыт:</strong><br>${reg.experience}</p>
-                </div>
-            `;
-            
-            showModal('Детали заявки', details);
+            alert(`Детали заявки #${id}`);
         }
         
-        // Экспорт CSV
-        function exportCSV() {
-            const rows = [
-                ['ID', 'ФИО', 'Оружие', 'Категория', 'Возраст', 'Телефон', 'Статус', 'Дата регистрации', 'Опыт']
-            ];
-            
-            allRegistrations.forEach(reg => {
-                rows.push([
-                    reg.id,
-                    reg.full_name,
-                    reg.weapon_type,
-                    reg.category,
-                    reg.age_group,
-                    reg.phone,
-                    reg.status === 'pending' ? 'Ожидает' : reg.status === 'confirmed' ? 'Подтверждена' : 'Отклонена',
-                    new Date(reg.created_at).toLocaleString('ru-RU'),
-                    reg.experience.replace(/"/g, '""')
-                ]);
-            });
-            
-            const csvContent = rows.map(row => 
-                row.map(cell => `"${cell}"`).join(';')
-            ).join('\n');
-            
-            const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            
-            link.setAttribute('href', url);
-            link.setAttribute('download', `регистрации_${new Date().toISOString().slice(0,10)}.csv`);
-            link.style.visibility = 'hidden';
-            
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            showNotification('📥 CSV файл скачивается', 'success');
-        }
-        
-        // Экспорт JSON
-        function exportJSON() {
-            const data = allRegistrations.map(reg => ({
-                id: reg.id,
-                full_name: reg.full_name,
-                weapon_type: reg.weapon_type,
-                category: reg.category,
-                age_group: reg.age_group,
-                phone: reg.phone,
-                status: reg.status,
-                created_at: reg.created_at,
-                experience: reg.experience
-            }));
-            
-            const jsonContent = JSON.stringify(data, null, 2);
-            const blob = new Blob([jsonContent], { type: 'application/json' });
-            const link = document.createElement('a');
-            const url = URL.createObjectURL(blob);
-            
-            link.setAttribute('href', url);
-            link.setAttribute('download', `регистрации_${new Date().toISOString().slice(0,10)}.json`);
-            link.style.visibility = 'hidden';
-            
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            showNotification('📥 JSON файл скачивается', 'success');
-        }
-        
-        // Печать таблицы
-        function printTable() {
-            const printWindow = window.open('', '_blank');
-            printWindow.document.write(`
-                <html>
-                    <head>
-                        <title>Регистрации - Tolyatti Fencing</title>
-                        <style>
-                            body { font-family: Arial, sans-serif; margin: 20px; }
-                            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-                            th { background-color: #f2f2f2; }
-                            h1 { color: #333; }
-                            @media print {
-                                body { margin: 0; }
-                                .no-print { display: none; }
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <h1>Регистрации участников - Tolyatti Fencing</h1>
-                        <p>Дата экспорта: ${new Date().toLocaleString('ru-RU')}</p>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>ID</th>
-                                    <th>ФИО</th>
-                                    <th>Оружие</th>
-                                    <th>Категория</th>
-                                    <th>Возраст</th>
-                                    <th>Телефон</th>
-                                    <th>Статус</th>
-                                    <th>Дата регистрации</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${allRegistrations.map(reg => `
-                                    <tr>
-                                        <td>${reg.id}</td>
-                                        <td>${reg.full_name}</td>
-                                        <td>${reg.weapon_type}</td>
-                                        <td>${reg.category}</td>
-                                        <td>${reg.age_group}</td>
-                                        <td>${reg.phone}</td>
-                                        <td>${reg.status === 'pending' ? 'Ожидает' : reg.status === 'confirmed' ? 'Подтверждена' : 'Отклонена'}</td>
-                                        <td>${new Date(reg.created_at).toLocaleString('ru-RU')}</td>
-                                    </tr>
-                                `).join('')}
-                            </tbody>
-                        </table>
-                        <p class="no-print">
-                            <br><br>
-                            <button onclick="window.print()">Печать</button>
-                            <button onclick="window.close()">Закрыть</button>
-                        </p>
-                    </body>
-                </html>
-            `);
-            printWindow.document.close();
-        }
-        
-        // Быстрые действия
-        function showAll() {
-            filterTable('all');
-            document.getElementById('searchInput').value = '';
-        }
-        
-        function showPending() {
-            filterTable('pending');
-            document.getElementById('searchInput').value = '';
-        }
-        
-        function refreshData() {
-            showLoader();
-            setTimeout(() => {
-                window.location.reload();
-            }, 500);
-        }
-        
-        // Вспомогательные функции
-        function showLoader() {
-            document.getElementById('loader').style.display = 'block';
-        }
-        
-        function hideLoader() {
-            document.getElementById('loader').style.display = 'none';
-        }
-        
-        function showNotification(message, type) {
-            // Создаем уведомление
-            const notification = document.createElement('div');
-            notification.style.cssText = `
-                position: fixed;
-                top: 20px;
-                right: 20px;
-                padding: 15px 20px;
-                border-radius: 8px;
-                color: white;
-                font-weight: bold;
-                z-index: 10000;
-                animation: slideIn 0.3s ease-out;
-                ${type === 'success' ? 'background: #27ae60;' : 'background: #e74c3c;'}
-            `;
-            
-            notification.innerHTML = `
-                <div style="display: flex; align-items: center; gap: 10px;">
-                    ${type === 'success' ? '✅' : '❌'}
-                    <span>${message}</span>
-                </div>
-            `;
-            
-            document.body.appendChild(notification);
-            
-            // Удаляем через 3 секунды
-            setTimeout(() => {
-                notification.style.animation = 'slideOut 0.3s ease-out';
-                setTimeout(() => {
-                    document.body.removeChild(notification);
-                }, 300);
-            }, 3000);
-        }
-        
-        function showModal(title, content) {
-            // Создаем модальное окно
-            const modal = document.createElement('div');
-            modal.style.cssText = `
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: rgba(0,0,0,0.5);
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                z-index: 10000;
-                animation: fadeIn 0.3s;
-            `;
-            
-            modal.innerHTML = `
-                <div style="
-                    background: white;
-                    border-radius: 10px;
-                    padding: 25px;
-                    max-width: 500px;
-                    width: 90%;
-                    max-height: 80vh;
-                    overflow-y: auto;
-                    animation: slideUp 0.3s;
-                ">
-                    <div style="
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                        margin-bottom: 20px;
-                        padding-bottom: 15px;
-                        border-bottom: 2px solid #f1f1f1;
-                    ">
-                        <h2 style="margin: 0; color: #2c3e50;">${title}</h2>
-                        <button onclick="this.closest('.modal-container').remove()" 
-                                style="
-                                    background: none;
-                                    border: none;
-                                    font-size: 24px;
-                                    cursor: pointer;
-                                    color: #666;
-                                ">&times;</button>
-                    </div>
-                    <div>${content}</div>
-                    <div style="margin-top: 25px; text-align: right;">
-                        <button onclick="this.closest('.modal-container').remove()"
-                                style="
-                                    padding: 10px 25px;
-                                    background: #3498db;
-                                    color: white;
-                                    border: none;
-                                    border-radius: 5px;
-                                    cursor: pointer;
-                                    font-weight: bold;
-                                ">Закрыть</button>
-                    </div>
-                </div>
-            `;
-            
-            modal.classList.add('modal-container');
-            document.body.appendChild(modal);
-            
-            // Закрытие по клику на фон
-            modal.addEventListener('click', (e) => {
-                if (e.target === modal) {
-                    modal.remove();
-                }
-            });
-        }
-        
-        // Добавляем стили для анимаций
-        const style = document.createElement('style');
-        style.textContent = `
-            @keyframes slideIn {
-                from { transform: translateX(100%); opacity: 0; }
-                to { transform: translateX(0); opacity: 1; }
-            }
-            
-            @keyframes slideOut {
-                from { transform: translateX(0); opacity: 1; }
-                to { transform: translateX(100%); opacity: 0; }
-            }
-            
-            @keyframes fadeIn {
-                from { opacity: 0; }
-                to { opacity: 1; }
-            }
-            
-            @keyframes slideUp {
-                from { transform: translateY(20px); opacity: 0; }
-                to { transform: translateY(0); opacity: 1; }
-            }
-        `;
-        document.head.appendChild(style);
-        
-        // Автообновление каждые 30 секунд если есть токен
-        {% if token %}
-        setInterval(() => {
-            refreshData();
-        }, 30000); // 30 секунд
-        {% endif %}
+        // Загружаем данные при открытии страницы
+        loadData();
     </script>
 </body>
 </html>
