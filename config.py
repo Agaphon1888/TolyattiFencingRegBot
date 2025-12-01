@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
     WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key')
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
     ADMIN_TOKEN_EXPIRE = int(os.environ.get('ADMIN_TOKEN_EXPIRE', 3600))
 
     ADMIN_TELEGRAM_IDS = os.environ.get('ADMIN_TELEGRAM_IDS', '')
@@ -28,7 +28,12 @@ class Config:
     def get_admin_ids(cls):
         if not cls.ADMIN_TELEGRAM_IDS:
             return []
-        return [int(id.strip()) for id in cls.ADMIN_TELEGRAM_IDS.split(',') if id.strip().isdigit()]
+        ids = []
+        for id_str in cls.ADMIN_TELEGRAM_IDS.split(','):
+            id_str = id_str.strip()
+            if id_str.isdigit():
+                ids.append(int(id_str))
+        return ids
 
     @classmethod
     def get_webhook_url(cls):
