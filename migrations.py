@@ -6,39 +6,36 @@
 import os
 import sys
 from datetime import datetime
+from sqlalchemy import text, inspect
 
 # Добавляем текущую директорию в путь
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import config
-from database import init_db, get_session, Registration, Admin
+from database import init_db, get_session, Registration, Admin, engine
 
 def run_migrations():
     """Запуск миграций"""
     print("🔄 Запуск миграций базы данных...")
     
     try:
-        # Инициализируем базу данных (создаст таблицы если их нет)
-        init_db()
+        # Инициализируем базу данных
+        from database import migrate_database, initialize_super_admins
+        migrate_database()
         
         session = get_session()
         try:
             count = session.query(Registration).count()
             print(f"✅ Таблицы созданы. Записей в базе: {count}")
             
+            # Инициализируем супер-админов
+            initialize_super_admins()
+            
             # Проверяем наличие админов
             admin_count = session.query(Admin).count()
             print(f"✅ Администраторов в базе: {admin_count}")
             
-            if admin_count == 0:
-                admin_ids = config.get_admin_ids()
-                if admin_ids:
-                    print(f"⚠️  Администраторы не найдены. Создаю из конфигурации: {admin_ids}")
-                else:
-                    print("⚠️  Администраторы не найдены. Установите ADMIN_TELEGRAM_IDS в конфигурации")
-            
             # Создаем индексы для быстрого поиска
-            from sqlalchemy import text
             indexes = [
                 "CREATE INDEX IF NOT EXISTS idx_status ON registrations(status)",
                 "CREATE INDEX IF NOT EXISTS idx_telegram_id ON registrations(telegram_id)",
