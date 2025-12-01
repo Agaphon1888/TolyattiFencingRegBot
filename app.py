@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template, render_template_string, send_from_directory
+from flask import Flask, request, jsonify, render_template, render_template_string
 from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
 import logging
@@ -6,6 +6,8 @@ import os
 import json
 from datetime import datetime, timedelta
 from functools import wraps
+import threading
+import time
 
 from config import config
 from database import init_db, get_session, Registration, Admin, session_scope
@@ -22,7 +24,11 @@ else:
     print(f"⚠️ Папка templates не найдена, использую корневую директорию")
 
 # Инициализация БД
-init_db()
+try:
+    init_db()
+    print("✅ База данных инициализирована")
+except Exception as e:
+    print(f"❌ Ошибка инициализации БД: {e}")
 
 # Логирование
 logging.basicConfig(
@@ -31,11 +37,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Бот
-bot = Bot(token=config.TELEGRAM_TOKEN)
+# ===== Глобальные переменные для бота =====
+bot_instance = None
+dp_instance = None
 
-# ===== Состояния =====
-NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
+def get_bot():
+    global bot_instance
+    if bot_instance is None:
+        try:
+            bot_instance = Bot(token=config.TELEGRAM_TOKEN)
+            logger.info(f"✅ Бот инициализирован: {bot_instance.get_me().first_name}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка инициализации бота: {e}")
+    return bot_instance
 
 # ===== Вспомогательные функции для шаблонов =====
 @app.template_filter('datetimeformat')
@@ -72,19 +86,19 @@ def status_icon(value):
 def tojson(value):
     return json.dumps(value, ensure_ascii=False, default=str)
 
-# ===== Декораторы =====
+# ===== Состояния регистрации =====
+NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
+
+# ===== Декораторы для проверки прав =====
 def admin_required(func):
     @wraps(func)
     def wrapper(update: Update, context: CallbackContext):
         user_id = update.message.from_user.id
-        session = get_session()
-        try:
+        with session_scope() as session:
             admin = session.query(Admin).filter_by(telegram_id=user_id, is_active=True).first()
             if not admin:
                 update.message.reply_text("❌ У вас нет прав администратора.")
                 return
-        finally:
-            session.close()
         return func(update, context)
     return wrapper
 
@@ -98,67 +112,10 @@ def super_admin_required(func):
         return func(update, context)
     return wrapper
 
-# ===== Админ-команды Telegram =====
-@admin_required
-def admin_stats(update: Update, context: CallbackContext):
-    with session_scope() as session:
-        regs = session.query(Registration).all()
-        total = len(regs)
-        pending = len([r for r in regs if r.status == 'pending'])
-        confirmed = len([r for r in regs if r.status == 'confirmed'])
-        rejected = len([r for r in regs if r.status == 'rejected'])
-
-        stats = f"""
-📊 *Статистика:*
-
-• Всего заявок: {total}
-• Ожидают: {pending}
-• Подтверждены: {confirmed}
-• Отклонены: {rejected}
-        """
-        update.message.reply_text(stats, parse_mode='Markdown')
-
-@super_admin_required
-def admin_add(update: Update, context: CallbackContext):
-    if not context.args:
-        update.message.reply_text("Использование: /admin_add <telegram_id> [роль]")
-        return
-    try:
-        tid = int(context.args[0])
-        role = context.args[1] if len(context.args) > 1 else 'moderator'
-        if role not in ['admin', 'moderator']:
-            update.message.reply_text("Роль: 'admin' или 'moderator'")
-            return
-
-        with session_scope() as session:
-            if session.query(Admin).filter_by(telegram_id=tid).first():
-                update.message.reply_text("⚠️ Уже является админом.")
-                return
-
-            new_admin = Admin(
-                telegram_id=tid, 
-                role=role, 
-                created_by=update.message.from_user.id
-            )
-            session.add(new_admin)
-        update.message.reply_text(f"✅ Админ {tid} добавлен как {role}")
-    except ValueError:
-        update.message.reply_text("❌ Неверный ID")
-
-@admin_required
-def admin_list(update: Update, context: CallbackContext):
-    with session_scope() as session:
-        admins = session.query(Admin).all()
-        msg = "👥 *Администраторы:*\n"
-        for a in admins:
-            status = "🟢" if a.is_active else "🔴"
-            msg += f"{status} {a.telegram_id} ({a.role})\n"
-        update.message.reply_text(msg, parse_mode='Markdown')
-
-# ===== Регистрация участников =====
+# ===== Команды Telegram бота =====
 def start(update: Update, context: CallbackContext) -> int:
     user = update.message.from_user
-    context.user_data.clear()  # Очищаем предыдущие данные
+    context.user_data.clear()
     context.user_data.update({
         'telegram_id': user.id,
         'username': user.username
@@ -222,7 +179,6 @@ def get_age(update: Update, context: CallbackContext) -> int:
         return AGE
     context.user_data['age_group'] = a
     
-    # Предлагаем поделиться контактом или ввести вручную
     kb = [[KeyboardButton("📞 Отправить мой номер", request_contact=True)], ["Ввести номер вручную"]]
     rm = ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True)
     update.message.reply_text(
@@ -235,13 +191,10 @@ def get_age(update: Update, context: CallbackContext) -> int:
 
 def get_phone(update: Update, context: CallbackContext) -> int:
     if update.message.contact:
-        # Получаем номер из контакта
         phone = update.message.contact.phone_number
     else:
-        # Получаем номер из текста
         phone = update.message.text.strip()
         
-        # Проверяем, не нажал ли пользователь кнопку "Ввести номер вручную"
         if phone == "Ввести номер вручную":
             update.message.reply_text(
                 "Введите номер телефона в формате:\n"
@@ -252,9 +205,9 @@ def get_phone(update: Update, context: CallbackContext) -> int:
     # Нормализуем номер
     phone = ''.join(filter(str.isdigit, phone))
     if len(phone) == 11 and phone.startswith('8'):
-        phone = '7' + phone[1:]  # 8... -> 7...
+        phone = '7' + phone[1:]
     if len(phone) == 10:
-        phone = '7' + phone  # 9991234567 -> 79991234567
+        phone = '7' + phone
     if not phone.startswith('7') or len(phone) != 11:
         update.message.reply_text("❌ Неверный формат номера. Пожалуйста, введите номер в формате +79991234567")
         return PHONE
@@ -278,7 +231,6 @@ def get_experience(update: Update, context: CallbackContext) -> int:
     context.user_data['experience'] = experience
     data = context.user_data
     
-    # Форматируем подтверждение
     msg = f"""
 📋 *Проверьте ваши данные:*
 
@@ -304,7 +256,6 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
 
     data = context.user_data
     with session_scope() as session:
-        # Проверяем, нет ли уже активной заявки
         existing = session.query(Registration).filter_by(
             telegram_id=data['telegram_id'],
             status='pending'
@@ -318,7 +269,6 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
             )
             return ConversationHandler.END
             
-        # Создаем новую заявку
         reg = Registration(
             telegram_id=data['telegram_id'],
             username=data['username'],
@@ -334,7 +284,8 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
     
     # Уведомляем администраторов
     admin_ids = config.get_admin_ids()
-    if admin_ids:
+    bot = get_bot()
+    if admin_ids and bot:
         notification = f"""
 📥 *Новая заявка на регистрацию*
 
@@ -359,7 +310,6 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
         reply_markup=None
     )
     
-    # Очищаем данные пользователя
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -417,8 +367,69 @@ def help_command(update: Update, context: CallbackContext):
     """
     update.message.reply_text(help_text, parse_mode='Markdown')
 
+@admin_required
+def admin_stats(update: Update, context: CallbackContext):
+    with session_scope() as session:
+        regs = session.query(Registration).all()
+        total = len(regs)
+        pending = len([r for r in regs if r.status == 'pending'])
+        confirmed = len([r for r in regs if r.status == 'confirmed'])
+        rejected = len([r for r in regs if r.status == 'rejected'])
+
+        stats = f"""
+📊 *Статистика:*
+
+• Всего заявок: {total}
+• Ожидают: {pending}
+• Подтверждены: {confirmed}
+• Отклонены: {rejected}
+        """
+        update.message.reply_text(stats, parse_mode='Markdown')
+
+@super_admin_required
+def admin_add(update: Update, context: CallbackContext):
+    if not context.args:
+        update.message.reply_text("Использование: /admin_add <telegram_id> [роль]")
+        return
+    try:
+        tid = int(context.args[0])
+        role = context.args[1] if len(context.args) > 1 else 'moderator'
+        if role not in ['admin', 'moderator']:
+            update.message.reply_text("Роль: 'admin' или 'moderator'")
+            return
+
+        with session_scope() as session:
+            if session.query(Admin).filter_by(telegram_id=tid).first():
+                update.message.reply_text("⚠️ Уже является админом.")
+                return
+
+            new_admin = Admin(
+                telegram_id=tid, 
+                role=role, 
+                created_by=update.message.from_user.id
+            )
+            session.add(new_admin)
+        update.message.reply_text(f"✅ Админ {tid} добавлен как {role}")
+    except ValueError:
+        update.message.reply_text("❌ Неверный ID")
+
+@admin_required
+def admin_list(update: Update, context: CallbackContext):
+    with session_scope() as session:
+        admins = session.query(Admin).all()
+        msg = "👥 *Администраторы:*\n"
+        for a in admins:
+            status = "🟢" if a.is_active else "🔴"
+            msg += f"{status} {a.telegram_id} ({a.role})\n"
+        update.message.reply_text(msg, parse_mode='Markdown')
+
 # ===== Настройка диспетчера Telegram =====
 def setup_dispatcher():
+    bot = get_bot()
+    if not bot:
+        logger.error("❌ Не удалось инициализировать бота для диспетчера")
+        return None
+    
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -434,17 +445,18 @@ def setup_dispatcher():
         allow_reentry=True
     )
 
-    dp = Dispatcher(bot, None, workers=1, use_context=True)
+    dp = Dispatcher(bot, None, workers=0, use_context=True)
     dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler('help', help_command))
     dp.add_handler(CommandHandler('myregistrations', view_registrations))
     dp.add_handler(CommandHandler('admin_stats', admin_stats))
     dp.add_handler(CommandHandler('admin_add', admin_add))
     dp.add_handler(CommandHandler('admin_list', admin_list))
+    
     return dp
 
 # Инициализируем диспетчер
-dp = setup_dispatcher()
+dp_instance = setup_dispatcher()
 
 # ===== Веб-маршруты Flask =====
 @app.route('/')
@@ -453,15 +465,7 @@ def home():
         "status": "running",
         "service": "Tolyatti Fencing Registration Bot",
         "version": "1.0.0",
-        "endpoints": {
-            "/": "Этот экран",
-            "/health": "Проверка состояния",
-            "/admin": "Простая админ-панель",
-            "/admin_panel?token=...": "Полная админ-панель",
-            "/webhook": "Webhook для Telegram",
-            "/set_webhook": "Установка webhook",
-            "/test_data": "Добавление тестовых данных"
-        }
+        "timestamp": datetime.utcnow().isoformat()
     })
 
 @app.route('/admin')
@@ -540,7 +544,6 @@ def admin_panel():
     """Полная админ-панель"""
     token = request.args.get('token')
     
-    # Проверка токена
     if not token or token != config.SECRET_KEY:
         return render_template('error.html', 
                              code=403, 
@@ -549,7 +552,6 @@ def admin_panel():
     with session_scope() as session:
         regs = session.query(Registration).order_by(Registration.created_at.desc()).all()
         
-        # Преобразуем объекты в словари для JSON
         regs_data = []
         for r in regs:
             regs_data.append({
@@ -567,13 +569,16 @@ def admin_panel():
                 'updated_at': r.updated_at.isoformat() if r.updated_at else None
             })
         
+        admin_ids = config.get_admin_ids()
+        current_admin_id = admin_ids[0] if admin_ids else 0
+        
         return render_template(
             'admin.html',
             registrations=regs,
             registrations_json=regs_data,
             config=config,
             token=token,
-            current_admin_id=config.get_admin_ids()[0] if config.get_admin_ids() else 0,
+            current_admin_id=current_admin_id,
             now=datetime.utcnow()
         )
 
@@ -591,21 +596,22 @@ def confirm_registration_api(reg_id):
         reg.status = 'confirmed'
         session.add(reg)
         
-        # Уведомляем пользователя в Telegram
-        try:
-            bot.send_message(
-                reg.telegram_id,
-                f"✅ *Ваша заявка #{reg.id} подтверждена!*\n\n"
-                f"Рады сообщить, что ваша заявка на участие в соревнованиях по фехтованию подтверждена.\n"
-                f"Ждем вас на соревнованиях!\n\n"
-                f"*Детали заявки:*\n"
-                f"ФИО: {reg.full_name}\n"
-                f"Оружие: {reg.weapon_type}\n"
-                f"Категория: {reg.category}",
-                parse_mode='Markdown'
-            )
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
+        bot = get_bot()
+        if bot:
+            try:
+                bot.send_message(
+                    reg.telegram_id,
+                    f"✅ *Ваша заявка #{reg.id} подтверждена!*\n\n"
+                    f"Рады сообщить, что ваша заявка на участие в соревнованиях по фехтованию подтверждена.\n"
+                    f"Ждем вас на соревнованиях!\n\n"
+                    f"*Детали заявки:*\n"
+                    f"ФИО: {reg.full_name}\n"
+                    f"Оружие: {reg.weapon_type}\n"
+                    f"Категория: {reg.category}",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
     
     return jsonify({'success': True, 'status': 'confirmed'})
 
@@ -623,17 +629,18 @@ def reject_registration_api(reg_id):
         reg.status = 'rejected'
         session.add(reg)
         
-        # Уведомляем пользователя в Telegram
-        try:
-            bot.send_message(
-                reg.telegram_id,
-                f"❌ *Ваша заявка #{reg.id} отклонена*\n\n"
-                f"К сожалению, ваша заявка на участие в соревнованиях была отклонена.\n"
-                f"По вопросам обращайтесь к организаторам.",
-                parse_mode='Markdown'
-            )
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
+        bot = get_bot()
+        if bot:
+            try:
+                bot.send_message(
+                    reg.telegram_id,
+                    f"❌ *Ваша заявка #{reg.id} отклонена*\n\n"
+                    f"К сожалению, ваша заявка на участие в соревнованиях была отклонена.\n"
+                    f"По вопросам обращайтесь к организаторам.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
     
     return jsonify({'success': True, 'status': 'rejected'})
 
@@ -670,8 +677,14 @@ def get_registrations_api():
 def webhook():
     """Endpoint для вебхука Telegram"""
     if request.method == "POST":
-        update = Update.de_json(request.get_json(force=True), bot)
-        dp.process_update(update)
+        try:
+            update = Update.de_json(request.get_json(force=True), get_bot())
+            if dp_instance:
+                dp_instance.process_update(update)
+            else:
+                logger.error("❌ Диспетчер не инициализирован")
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки webhook: {e}")
     return 'ok'
 
 @app.route('/set_webhook')
@@ -679,15 +692,22 @@ def set_webhook():
     """Установка вебхука"""
     try:
         webhook_url = config.get_webhook_url()
+        bot = get_bot()
+        
+        if not bot:
+            return "❌ Бот не инициализирован", 500
+        
         success = bot.set_webhook(webhook_url)
         
         if success:
+            bot_info = bot.get_me()
             return render_template_string("""
             <h1>✅ Webhook установлен успешно!</h1>
             <p><strong>URL:</strong> {{ url }}</p>
             <p><strong>Бот:</strong> {{ bot_name }}</p>
             <p><a href="/">На главную</a> | <a href="/admin">В админку</a></p>
-            """, url=webhook_url, bot_name=bot.get_me().first_name)
+            <p><a href="/health">Проверить состояние</a></p>
+            """, url=webhook_url, bot_name=bot_info.first_name if bot_info else "Unknown")
         else:
             return "❌ Не удалось установить webhook", 500
     except Exception as e:
@@ -703,11 +723,14 @@ def health():
     except Exception as e:
         db_status = f'disconnected: {str(e)}'
     
+    bot_status = 'initialized' if get_bot() else 'failed'
+    
     return jsonify({
         'status': 'healthy',
         'service': 'Tolyatti Fencing Bot',
         'database': db_status,
-        'webhook': bot.get_webhook_info().url if hasattr(bot, 'get_webhook_info') else 'not set',
+        'bot': bot_status,
+        'webhook_set': bool(get_bot() and get_bot().get_webhook_info().url if get_bot() else False),
         'timestamp': datetime.utcnow().isoformat(),
         'version': '1.0.0'
     })
@@ -715,8 +738,8 @@ def health():
 @app.route('/test_data')
 def test_data():
     """Добавление тестовых данных"""
-    from migrations import create_test_data
     try:
+        from migrations import create_test_data
         create_test_data()
         return render_template_string("""
         <h1>✅ Тестовые данные добавлены</h1>
@@ -729,13 +752,6 @@ def test_data():
         """, token=config.SECRET_KEY)
     except Exception as e:
         return f"❌ Ошибка при добавлении тестовых данных: {str(e)}", 500
-
-@app.route('/static/<path:filename>')
-def static_files(filename):
-    """Статические файлы"""
-    if os.path.exists('static'):
-        return send_from_directory('static', filename)
-    return "Not found", 404
 
 @app.errorhandler(404)
 def not_found_error(error):
@@ -756,15 +772,25 @@ def forbidden_error(error):
                          code=403, 
                          error="Доступ запрещен. У вас нет прав для просмотра этой страницы."), 403
 
-# ===== Запуск приложения =====
-if __name__ == '__main__':
-    # Устанавливаем вебхук при запуске
-    try:
-        webhook_url = config.get_webhook_url()
-        bot.set_webhook(webhook_url)
-        logger.info(f"✅ Webhook установлен: {webhook_url}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка установки webhook: {e}")
+# ===== Функция для установки webhook при старте =====
+def setup_webhook_on_start():
+    """Установка вебхука при запуске приложения"""
+    def delayed_webhook_setup():
+        time.sleep(10)  # Ждем 10 секунд чтобы сервер запустился
+        try:
+            bot = get_bot()
+            if bot:
+                webhook_url = config.get_webhook_url()
+                bot.set_webhook(webhook_url)
+                logger.info(f"✅ Webhook установлен: {webhook_url}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка установки webhook при старте: {e}")
     
-    # Запускаем Flask приложение
+    thread = threading.Thread(target=delayed_webhook_setup, daemon=True)
+    thread.start()
+
+# Устанавливаем webhook при импорте модуля
+setup_webhook_on_start()
+
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=config.PORT, debug=config.DEBUG)
