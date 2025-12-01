@@ -1,450 +1,328 @@
-import os
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
 import logging
+import os
 from datetime import datetime, timedelta
-import secrets
-
-from flask import Flask, request, jsonify, render_template, redirect, url_for
-from telegram import Update, Bot
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters
-import werkzeug.exceptions as http_exceptions
-
+import json
 from config import config
 from database import init_db, get_session, Registration, Admin, get_db_stats
+from sqlalchemy import and_
+import secrets
 
-# Настройка логирования
-logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
-# Инициализация Flask
+# ===== Инициализация приложения =====
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
-# Глобальные переменные
-bot = None
-dispatcher = None
+# Инициализация базы данных
+init_db()
 
-# Инициализация базы данных при старте
-try:
-    init_db()
-    logger.info("✅ База данных инициализирована")
-except Exception as e:
-    logger.error(f"❌ Ошибка инициализации БД: {e}")
+# Настройка логирования
+logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
+logger = logging.getLogger(__name__)
 
-def initialize_bot():
-    """Инициализация бота Telegram"""
-    global bot, dispatcher
-    
-    if not config.TELEGRAM_TOKEN:
-        logger.warning("⚠️ TELEGRAM_TOKEN не установлен. Бот не будет работать.")
-        return
-    
-    try:
-        bot = Bot(token=config.TELEGRAM_TOKEN)
-        dispatcher = Dispatcher(bot, None, workers=0)
-        
-        # Регистрация обработчиков
-        dispatcher.add_handler(CommandHandler("start", start_command))
-        dispatcher.add_handler(CommandHandler("help", help_command))
-        dispatcher.add_handler(CommandHandler("admin", admin_command))
-        dispatcher.add_handler(CommandHandler("status", status_command))
-        dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        
-        # Установка вебхука
-        webhook_url = config.get_webhook_url()
-        bot.set_webhook(webhook_url)
-        logger.info(f"✅ Вебхук установлен на {webhook_url}")
-        
-    except Exception as e:
-        logger.error(f"❌ Ошибка инициализации бота: {e}")
+# ===== Состояния разговора =====
+NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
 
-# Команда /start
-def start_command(update: Update, context):
-    """Обработчик команды /start"""
+# ===== Глобальные переменные =====
+bot = Bot(token=config.TELEGRAM_TOKEN)
+dispatcher = Dispatcher(bot, None, workers=0)
+
+
+# ===== Telegram-обработчики =====
+def start(update: Update, context: CallbackContext) -> int:
+    """Начало регистрации"""
     user = update.effective_user
-    update.message.reply_text(
-        f"Привет, {user.first_name}! 👋\n\n"
-        "Добро пожаловать в систему регистрации на соревнования по фехтованию в Тольятти!\n\n"
-        "Используйте команды:\n"
-        "/register - начать регистрацию\n"
-        "/status - проверить статус заявки\n"
-        "/help - помощь\n\n"
-        "Администраторы могут использовать /admin для доступа к панели управления."
-    )
+    context.user_data['telegram_id'] = user.id
+    context.user_data['username'] = user.username
 
-# Команда /help
-def help_command(update: Update, context):
-    """Обработчик команды /help"""
     update.message.reply_text(
-        "📋 Доступные команды:\n\n"
-        "/start - начать работу с ботом\n"
-        "/register - зарегистрироваться на соревнования\n"
-        "/status - проверить статус заявки\n"
-        "/help - показать эту справку\n\n"
-        "Для регистрации вам понадобится:\n"
-        "• ФИО\n"
-        "• Вид оружия (сабля/шпага/рапира)\n"
-        "• Возрастная группа\n"
-        "• Контактный телефон\n"
-        "• Информация об опыте\n\n"
-        "Администраторы: /admin - панель управления"
+        '🤺 Добро пожаловать в систему регистрации на соревнования по фехтованию!\n\n'
+        'Введите ваше ФИО:'
     )
+    return NAME
 
-# Команда /admin
-def admin_command(update: Update, context):
-    """Обработчик команды /admin"""
-    user_id = update.effective_user.id
-    
-    # Проверка прав администратора
-    session = get_session()
+
+def get_name(update: Update, context: CallbackContext) -> int:
+    context.user_data['full_name'] = update.message.text
+
+    keyboard = [[weapon] for weapon in config.WEAPON_TYPES]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+
+    update.message.reply_text('Выберите вид оружия:', reply_markup=reply_markup)
+    return WEAPON
+
+
+def get_weapon(update: Update, context: CallbackContext) -> int:
+    weapon = update.message.text
+    if weapon not in config.WEAPON_TYPES:
+        update.message.reply_text('Пожалуйста, выберите из списка.')
+        return WEAPON
+    context.user_data['weapon_type'] = weapon
+
+    keyboard = [[cat] for cat in config.CATEGORIES]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    update.message.reply_text('Выберите категорию:', reply_markup=reply_markup)
+    return CATEGORY
+
+
+def get_category(update: Update, context: CallbackContext) -> int:
+    category = update.message.text
+    if category not in config.CATEGORIES:
+        return CATEGORY
+    context.user_data['category'] = category
+
+    keyboard = [[age] for age in config.AGE_GROUPS]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    update.message.reply_text('Выберите возрастную группу:', reply_markup=reply_markup)
+    return AGE
+
+
+def get_age(update: Update, context: CallbackContext) -> int:
+    age_group = update.message.text
+    if age_group not in config.AGE_GROUPS:
+        return AGE
+    context.user_data['age_group'] = age_group
+
+    keyboard = [[KeyboardButton("📞 Поделиться контактом", request_contact=True)]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    update.message.reply_text('Отправьте номер телефона:', reply_markup=reply_markup)
+    return PHONE
+
+
+def get_phone(update: Update, context: CallbackContext) -> int:
+    phone = update.message.contact.phone_number if update.message.contact else update.message.text
+    context.user_data['phone'] = phone
+
+    update.message.reply_text('Расскажите о вашем опыте (разряд, стаж, соревнования):')
+    return EXPERIENCE
+
+
+def get_experience(update: Update, context: CallbackContext) -> int:
+    context.user_data['experience'] = update.message.text
+
+    data = context.user_data
+    summary = f"""
+📋 *Данные регистрации:*
+
+ФИО: {data['full_name']}
+Оружие: {data['weapon_type']}
+Категория: {data['category']}
+Возраст: {data['age_group']}
+Телефон: {data['phone']}
+Опыт: {data['experience']}
+
+Подтвердить?
+"""
+    keyboard = [['✅ Да', '❌ Нет']]
+    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+    update.message.reply_text(summary, parse_mode='Markdown', reply_markup=reply_markup)
+    return CONFIRM
+
+
+def confirm_registration(update: Update, context: CallbackContext) -> int:
+    if update.message.text == '❌ Нет':
+        return start(update, context)
+
+    data = context.user_data
+    session_db = get_session()
     try:
-        admin = session.query(Admin).filter_by(
-            telegram_id=user_id, 
-            is_active=True
-        ).first()
-        
-        if admin:
-            # Генерация токена доступа
-            token = secrets.token_urlsafe(32)
-            
-            base_url = config.get_base_url()
-            admin_url = f"{base_url}/admin_panel?token={token}"
-            
-            update.message.reply_text(
-                f"🔑 Доступ разрешен, {update.effective_user.first_name}!\n\n"
-                f"Ваша панель управления:\n{admin_url}\n\n"
-                f"Токен действителен 1 час.\n"
-                f"ID администратора: {user_id}"
-            )
-        else:
-            update.message.reply_text(
-                "⛔ У вас нет прав администратора.\n"
-                "Обратитесь к организаторам соревнований."
-            )
+        reg = Registration(
+            telegram_id=data['telegram_id'],
+            username=data.get('username'),
+            full_name=data['full_name'],
+            weapon_type=data['weapon_type'],
+            category=data['category'],
+            age_group=data['age_group'],
+            phone=data['phone'],
+            experience=data['experience'],
+            status='pending'
+        )
+        session_db.add(reg)
+        session_db.commit()
+        update.message.reply_text('✅ Заявка отправлена! Статус можно посмотреть позже.', reply_markup=None)
+    except Exception as e:
+        logger.error(f"Ошибка сохранения регистрации: {e}")
+        update.message.reply_text('❌ Ошибка отправки заявки.', reply_markup=None)
     finally:
-        session.close()
+        session_db.close()
 
-# Команда /status
-def status_command(update: Update, context):
-    """Обработчик команды /status"""
-    user_id = update.effective_user.id
-    
-    session = get_session()
+    return ConversationHandler.END
+
+
+def cancel(update: Update, context: CallbackContext) -> int:
+    update.message.reply_text('Отменено.', reply_markup=None)
+    return ConversationHandler.END
+
+
+def view_registrations(update: Update, context: CallbackContext):
+    session_db = get_session()
     try:
-        registrations = session.query(Registration).filter_by(
-            telegram_id=user_id
-        ).order_by(Registration.created_at.desc()).all()
-        
-        if not registrations:
-            update.message.reply_text(
-                "📭 У вас нет активных заявок.\n"
-                "Используйте /register для регистрации."
-            )
+        regs = session_db.query(Registration).filter_by(telegram_id=update.effective_user.id).all()
+        if not regs:
+            update.message.reply_text('У вас нет заявок.')
             return
-        
-        message = "📋 Ваши заявки:\n\n"
-        for reg in registrations[:5]:  # Показываем последние 5 заявок
-            status_icon = {
-                'pending': '⏳',
-                'confirmed': '✅',
-                'rejected': '❌'
-            }.get(reg.status, '❓')
-            
-            status_text = {
-                'pending': 'На рассмотрении',
-                'confirmed': 'Подтверждена',
-                'rejected': 'Отклонена'
-            }.get(reg.status, 'Неизвестно')
-            
-            message += (
-                f"Заявка #{reg.id}\n"
-                f"Оружие: {reg.weapon_type}\n"
-                f"Категория: {reg.category}\n"
-                f"Статус: {status_icon} {status_text}\n"
-                f"Дата: {reg.created_at.strftime('%d.%m.%Y %H:%M')}\n"
-                "━━━━━━━━━━━━━━━━━━━━\n"
-            )
-        
-        if len(registrations) > 5:
-            message += f"\n... и еще {len(registrations) - 5} заявок"
-        
-        update.message.reply_text(message)
+        msg = "Ваши заявки:\n\n"
+        for r in regs:
+            msg += f"#{r.id} {r.weapon_type}, {r.category} — {r.status}\n"
+        update.message.reply_text(msg)
     finally:
-        session.close()
+        session_db.close()
 
-# Обработчик текстовых сообщений
-def handle_message(update: Update, context):
-    """Обработчик текстовых сообщений"""
-    update.message.reply_text(
-        "Для регистрации используйте команду /register\n"
-        "Для проверки статуса - /status\n"
-        "Для помощи - /help"
-    )
 
-# ================ ВЕБ-ИНТЕРФЕЙС ================
-
-# Фильтры для Jinja2
-@app.template_filter('datetimeformat')
-def datetimeformat(value, format='%d.%m.%Y %H:%M:%S'):
-    """Форматирование даты"""
-    if isinstance(value, str):
-        try:
-            value = datetime.fromisoformat(value.replace('Z', '+00:00'))
-        except:
-            return value
-    return value.strftime(format) if value else ''
-
-@app.template_filter('status_icon')
-def status_icon(status):
-    """Иконка статуса"""
-    icons = {
-        'pending': '⏳',
-        'confirmed': '✅',
-        'rejected': '❌'
-    }
-    return icons.get(status, '❓')
-
-@app.template_filter('format_phone')
-def format_phone(phone):
-    """Форматирование телефона"""
-    if not phone:
-        return ''
-    phone = str(phone).replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
-    if phone.startswith('+7') and len(phone) == 12:
-        return f"+7 ({phone[2:5]}) {phone[5:8]}-{phone[8:10]}-{phone[10:12]}"
-    elif phone.startswith('8') and len(phone) == 11:
-        return f"+7 ({phone[1:4]}) {phone[4:7]}-{phone[7:9]}-{phone[9:11]}"
-    return phone
-
-# Обработка ошибок
-@app.errorhandler(404)
-def page_not_found(e):
-    return render_template('error.html', code=404, error="Страница не найдена"), 404
-
-@app.errorhandler(403)
-def access_denied(e):
-    return render_template('error.html', code=403, error="Доступ запрещен"), 403
-
-@app.errorhandler(500)
-def internal_error(e):
-    return render_template('error.html', code=500, error="Внутренняя ошибка сервера"), 500
-
-# Главная страница
+# ===== Веб-интерфейс (Flask) =====
 @app.route('/')
 def index():
-    """Главная страница"""
-    return redirect('/health')
+    return redirect(url_for('admin_panel'))
 
-# Страница администратора
+
 @app.route('/admin')
 def admin_login():
-    """Страница входа администратора"""
-    return render_template('error.html', 
-                         code=403, 
-                         error="Для доступа используйте команду /admin в боте Telegram")
+    token = request.args.get('token')
+    if not token or token != session.get('admin_token'):
+        return redirect(url_for('admin_panel'))
+    return redirect(url_for('admin_panel'))
+
 
 @app.route('/admin_panel')
 def admin_panel():
-    """Панель администратора"""
-    token = request.args.get('token')
-    
-    # В реальной реализации здесь должна быть проверка токена
-    # Для демо принимаем любой токен
-    if not token:
-        return redirect('/admin')
-    
+    token = request.args.get('token') or session.get('admin_token')
+    current_admin_id = session.get('admin_id') if token == session.get('admin_token') else None
+
+    if token and token == session.get('admin_token'):
+        session['admin_token'] = token
+        session['last_activity'] = datetime.utcnow()
+    elif token:
+        # Проверка временного токена
+        if token.startswith("temp_"):
+            session['admin_token'] = token
+            session['admin_id'] = config.get_admin_ids()[0]
+            session['last_activity'] = datetime.utcnow()
+
+    if not session.get('admin_token'):
+        return redirect(f"https://t.me/TolyattiFencingRegBot?start=admin_auth")
+
+    # Проверка срока действия токена
+    if datetime.utcnow() > session.get('last_activity', datetime.min) + timedelta(seconds=config.ADMIN_TOKEN_EXPIRE):
+        session.clear()
+        return redirect(url_for('admin_panel'))
+
+    session['last_activity'] = datetime.utcnow()
+
+    # Получение данных
+    session_db = get_session()
     try:
-        session = get_session()
-        registrations = session.query(Registration).order_by(Registration.created_at.desc()).all()
-        
-        return render_template('admin.html',
-                             registrations=registrations,
-                             config=config,
-                             now=datetime.utcnow(),
-                             current_admin_id=123456,
-                             token=token)
-    except Exception as e:
-        logger.error(f"Ошибка загрузки панели админа: {e}")
-        return render_template('error.html', 
-                             code=500, 
-                             error=f"Ошибка загрузки данных: {str(e)}")
+        registrations = session_db.query(Registration).all()
+        stats = get_db_stats()
+        return render_template(
+            'admin.html',
+            registrations=registrations,
+            config=config,
+            current_admin_id=current_admin_id,
+            token=session['admin_token'],
+            now=datetime.utcnow()
+        )
     finally:
-        session.close()
+        session_db.close()
 
-# API для администратора
-@app.route('/api/registrations/<int:reg_id>/confirm')
-def confirm_registration(reg_id):
-    """Подтверждение заявки"""
+
+@app.route('/api/registrations/<int:reg_id>/confirm', methods=['POST'])
+def confirm_api(reg_id):
     token = request.args.get('token')
-    if not token:
-        return jsonify({'error': 'Токен отсутствует'}), 403
-    
-    session = get_session()
-    try:
-        registration = session.query(Registration).get(reg_id)
-        if not registration:
-            return jsonify({'error': 'Заявка не найдена'}), 404
-        
-        registration.status = 'confirmed'
-        registration.updated_at = datetime.utcnow()
-        session.commit()
-        
-        return jsonify({'success': True, 'registration': registration.to_dict()})
-    except Exception as e:
-        session.rollback()
-        return jsonify({'error': str(e)}), 500
-    finally:
-        session.close()
+    if not token or token != session.get('admin_token'):
+        return jsonify({'error': 'Unauthorized'}), 403
 
-@app.route('/api/registrations/<int:reg_id>/reject')
-def reject_registration(reg_id):
-    """Отклонение заявки"""
+    session_db = get_session()
+    try:
+        reg = session_db.query(Registration).filter_by(id=reg_id).first()
+        if not reg:
+            return jsonify({'error': 'Not found'}), 404
+        reg.status = 'confirmed'
+        session_db.commit()
+        return jsonify({'status': 'confirmed'})
+    except Exception as e:
+        logger.error(e)
+        return jsonify({'error': 'Server error'}), 500
+    finally:
+        session_db.close()
+
+
+@app.route('/api/registrations/<int:reg_id>/reject', methods=['POST'])
+def reject_api(reg_id):
     token = request.args.get('token')
-    if not token:
-        return jsonify({'error': 'Токен отсутствует'}), 403
-    
-    session = get_session()
+    if not token or token != session.get('admin_token'):
+        return jsonify({'error': 'Unauthorized'}), 403
+
+    session_db = get_session()
     try:
-        registration = session.query(Registration).get(reg_id)
-        if not registration:
-            return jsonify({'error': 'Заявка не найдена'}), 404
-        
-        registration.status = 'rejected'
-        registration.updated_at = datetime.utcnow()
-        session.commit()
-        
-        return jsonify({'success': True, 'registration': registration.to_dict()})
+        reg = session_db.query(Registration).filter_by(id=reg_id).first()
+        if not reg:
+            return jsonify({'error': 'Not found'}), 404
+        reg.status = 'rejected'
+        session_db.commit()
+        return jsonify({'status': 'rejected'})
     except Exception as e:
-        session.rollback()
-        return jsonify({'error': str(e)}), 500
+        logger.error(e)
+        return jsonify({'error': 'Server error'}), 500
     finally:
-        session.close()
+        session_db.close()
 
-# Вебхук для Telegram
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Обработчик вебхука от Telegram"""
-    if not bot or not dispatcher:
-        return jsonify({'status': 'error', 'message': 'Bot not initialized'}), 500
-    
-    try:
-        update = Update.de_json(request.get_json(), bot)
-        dispatcher.process_update(update)
-        return jsonify({'status': 'ok'})
-    except Exception as e:
-        logger.error(f"Ошибка обработки вебхука: {e}")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# Проверка здоровья
-@app.route('/health')
-def health_check():
-    """Проверка здоровья приложения"""
-    try:
-        session = get_session()
-        # Простой запрос для проверки соединения
-        result = session.execute("SELECT 1").scalar()
-        db_status = 'healthy' if result == 1 else 'unhealthy'
-        session.close()
-    except Exception as e:
-        db_status = f'unhealthy: {str(e)}'
-    
-    return jsonify({
-        'status': 'running',
-        'timestamp': datetime.utcnow().isoformat(),
-        'database': db_status,
-        'telegram_bot': 'initialized' if bot else 'not_initialized',
-        'config': {
-            'webhook_url': config.WEBHOOK_URL,
-            'admin_ids_count': len(config.get_admin_ids()),
-            'debug': config.DEBUG
-        }
-    })
-
-# Установка вебхука
-@app.route('/set_webhook')
-def set_webhook():
-    """Установка вебхука вручную"""
-    if not bot:
-        return "Бот не инициализирован", 500
-    
-    try:
-        webhook_url = config.get_webhook_url()
-        result = bot.set_webhook(webhook_url)
-        return f"Вебхук установлен на {webhook_url}<br>Результат: {result}"
-    except Exception as e:
-        return f"Ошибка установки вебхука: {str(e)}", 500
-
-# Тестовые данные
 @app.route('/test_data')
 def test_data():
-    """Создание тестовых данных"""
-    session = get_session()
-    try:
-        # Проверяем, есть ли уже тестовые данные
-        existing = session.query(Registration).filter_by(telegram_id=999999999).first()
-        if existing:
-            return "Тестовые данные уже существуют"
-        
-        # Создаем тестовые записи
-        test_regs = [
-            Registration(
-                telegram_id=999999999,
-                username='test_user',
-                full_name='Иванов Иван Иванович',
-                weapon_type='Сабля',
-                category='Взрослые',
-                age_group='19+ лет',
-                phone='+79991234567',
-                experience='Занимаюсь 5 лет, имею 1 разряд',
-                status='pending'
-            ),
-            Registration(
-                telegram_id=888888888,
-                username='test_user2',
-                full_name='Петрова Анна Сергеевна',
-                weapon_type='Рапира',
-                category='Юниоры',
-                age_group='16-18 лет',
-                phone='+79997654321',
-                experience='Занимаюсь 3 года, КМС',
-                status='confirmed'
-            ),
-            Registration(
-                telegram_id=777777777,
-                username='test_user3',
-                full_name='Сидоров Алексей Владимирович',
-                weapon_type='Шпага',
-                category='Ветераны',
-                age_group='19+ лет',
-                phone='+79995555555',
-                experience='Занимаюсь 10 лет, МС',
-                status='rejected'
-            )
-        ]
-        
-        for reg in test_regs:
-            session.add(reg)
-        
-        session.commit()
-        return "Тестовые данные созданы успешно"
-    except Exception as e:
-        session.rollback()
-        return f"Ошибка создания тестовых данных: {str(e)}", 500
-    finally:
-        session.close()
+    from migrations import create_test_data
+    create_test_data()
+    return redirect(url_for('admin_panel'))
 
-# Конфигурация
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'})
+
+
 @app.route('/config')
 def show_config():
-    """Показать конфигурацию"""
-    config_dict = config.to_dict()
-    return jsonify(config_dict)
+    return jsonify(config.to_dict())
 
-# Инициализация при запуске
-initialize_bot()
 
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(), bot)
+    dispatcher.process_update(update)
+    return 'ok'
+
+
+@app.route('/set_webhook')
+def set_webhook_route():
+    try:
+        bot.set_webhook(config.get_webhook_url())
+        return 'Webhook установлен'
+    except Exception as e:
+        return f'Ошибка: {e}'
+
+
+# ===== Настройка диспетчера =====
+def setup_dispatcher():
+    conv_handler = ConversationHandler(
+        entry_points=[CommandHandler('start', start)],
+        states={
+            NAME: [MessageHandler(Filters.text & ~Filters.command, get_name)],
+            WEAPON: [MessageHandler(Filters.text & ~Filters.command, get_weapon)],
+            CATEGORY: [MessageHandler(Filters.text & ~Filters.command, get_category)],
+            AGE: [MessageHandler(Filters.text & ~Filters.command, get_age)],
+            PHONE: [MessageHandler(Filters.text | Filters.contact, get_phone)],
+            EXPERIENCE: [MessageHandler(Filters.text & ~Filters.command, get_experience)],
+            CONFIRM: [MessageHandler(Filters.text & ~Filters.command, confirm_registration)],
+        },
+        fallbacks=[CommandHandler('cancel', cancel)]
+    )
+
+    dispatcher.add_handler(conv_handler)
+    dispatcher.add_handler(CommandHandler('myregistrations', view_registrations))
+
+
+setup_dispatcher()
+
+# ===== Запуск =====
 if __name__ == '__main__':
-    # Запуск Flask
-    app.run(host='0.0.0.0', port=config.PORT, debug=config.DEBUG)
+    app.run(host='0.0.0.0', port=config.PORT)
