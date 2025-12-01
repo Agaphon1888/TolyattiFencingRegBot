@@ -65,6 +65,22 @@ class SimpleDB:
     def get_all_registrations(self):
         return self.registrations
     
+    def get_pending_registrations(self):
+        return [r for r in self.registrations if r['status'] == 'pending']
+    
+    def get_registration_by_id(self, reg_id):
+        for reg in self.registrations:
+            if reg['id'] == reg_id:
+                return reg
+        return None
+    
+    def update_registration_status(self, reg_id, status):
+        for reg in self.registrations:
+            if reg['id'] == reg_id:
+                reg['status'] = status
+                return True
+        return False
+    
     def get_user_registrations(self, telegram_id):
         return [r for r in self.registrations if r['telegram_id'] == telegram_id]
     
@@ -139,6 +155,16 @@ try:
 except Exception as e:
     logger.error(f"❌ Ошибка инициализации бота: {e}")
 
+# === Декораторы для проверки прав ===
+def admin_required(func):
+    def wrapper(update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        if not db.is_admin(user_id):
+            update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        return func(update, context)
+    return wrapper
+
 # === Команды бота ===
 def start(update: Update, context: CallbackContext) -> int:
     user = update.effective_user
@@ -146,11 +172,26 @@ def start(update: Update, context: CallbackContext) -> int:
     context.user_data['telegram_id'] = user.id
     context.user_data['username'] = user.username
     
-    update.message.reply_text(
-        "🤺 Добро пожаловать в систему регистрации на соревнования по фехтованию!\n\n"
-        "Введите ваше ФИО (полностью):"
-    )
-    return NAME
+    # Если пользователь админ, показываем админ-меню
+    if db.is_admin(user.id):
+        keyboard = [
+            ["📊 Статистика", "📋 Список заявок"],
+            ["⏳ Ожидающие", "✅ Подтвержденные"],
+            ["📝 Новая регистрация"]
+        ]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        update.message.reply_text(
+            "👑 Панель администратора\nВыберите действие:",
+            reply_markup=reply_markup
+        )
+        return ConversationHandler.END
+    else:
+        # Обычный пользователь - начинаем регистрацию
+        update.message.reply_text(
+            "🤺 Добро пожаловать в систему регистрации на соревнования по фехтованию!\n\n"
+            "Введите ваше ФИО (полностью):"
+        )
+        return NAME
 
 def get_name(update: Update, context: CallbackContext) -> int:
     context.user_data['full_name'] = update.message.text
@@ -263,10 +304,13 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
                 bot.send_message(
                     admin_id,
                     f"📝 *Новая заявка!*\n\n"
+                    f"ID: {registration['id']}\n"
                     f"ФИО: {registration['full_name']}\n"
                     f"Оружие: {registration['weapon_type']}\n"
                     f"Категория: {registration['category']}\n"
-                    f"Телефон: {registration['phone']}",
+                    f"Телефон: {registration['phone']}\n\n"
+                    f"Подтвердить: /confirm_{registration['id']}\n"
+                    f"Отклонить: /reject_{registration['id']}",
                     parse_mode='Markdown'
                 )
             except Exception as e:
@@ -288,19 +332,17 @@ def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text("Регистрация отменена.", reply_markup=None)
     return ConversationHandler.END
 
-def stats_command(update: Update, context: CallbackContext):
-    if not db.is_admin(update.effective_user.id):
-        update.message.reply_text("❌ У вас нет прав для просмотра статистики.")
-        return
-    
+# === Админские команды ===
+@admin_required
+def admin_stats(update: Update, context: CallbackContext):
     stats = db.get_stats()
     message = f"""
 📊 *Статистика заявок:*
 
-Всего: {stats['total']}
-⏳ Ожидают: {stats['pending']}
-✅ Подтверждены: {stats['confirmed']}
-❌ Отклонены: {stats['rejected']}
+*Всего:* {stats['total']}
+⏳ *Ожидают:* {stats['pending']}
+✅ *Подтверждены:* {stats['confirmed']}
+❌ *Отклонены:* {stats['rejected']}
 
 *По оружию:*
 """
@@ -309,8 +351,183 @@ def stats_command(update: Update, context: CallbackContext):
     
     update.message.reply_text(message, parse_mode='Markdown')
 
+@admin_required
+def admin_list(update: Update, context: CallbackContext):
+    registrations = db.get_all_registrations()
+    if not registrations:
+        update.message.reply_text("📝 Нет заявок.")
+        return
+    
+    message = "📋 *Все заявки:*\n\n"
+    for reg in registrations[-10:]:  # Последние 10 заявок
+        status_icon = "⏳" if reg['status'] == 'pending' else "✅" if reg['status'] == 'confirmed' else "❌"
+        message += f"{status_icon} *ID {reg['id']}:* {reg['full_name']} - {reg['weapon_type']} - {reg['status']}\n"
+    
+    update.message.reply_text(message, parse_mode='Markdown')
+
+@admin_required
+def admin_pending(update: Update, context: CallbackContext):
+    pending = db.get_pending_registrations()
+    if not pending:
+        update.message.reply_text("⏳ Нет ожидающих заявок.")
+        return
+    
+    message = "⏳ *Ожидающие заявки:*\n\n"
+    for reg in pending[-10:]:  # Последние 10 ожидающих
+        message += f"*ID {reg['id']}:* {reg['full_name']}\n"
+        message += f"Оружие: {reg['weapon_type']}\n"
+        message += f"Телефон: {reg['phone']}\n"
+        message += f"Подтвердить: /confirm_{reg['id']}\n"
+        message += f"Отклонить: /reject_{reg['id']}\n\n"
+    
+    update.message.reply_text(message, parse_mode='Markdown')
+
+@admin_required
+def admin_confirmed(update: Update, context: CallbackContext):
+    confirmed = [r for r in db.get_all_registrations() if r['status'] == 'confirmed']
+    if not confirmed:
+        update.message.reply_text("✅ Нет подтвержденных заявок.")
+        return
+    
+    message = "✅ *Подтвержденные заявки:*\n\n"
+    for reg in confirmed[-10:]:  # Последние 10 подтвержденных
+        message += f"*ID {reg['id']}:* {reg['full_name']} - {reg['weapon_type']}\n"
+    
+    update.message.reply_text(message, parse_mode='Markdown')
+
+@admin_required
+def confirm_registration_cmd(update: Update, context: CallbackContext):
+    try:
+        reg_id = int(context.args[0]) if context.args else None
+        if not reg_id:
+            update.message.reply_text("Используйте: /confirm <ID заявки>")
+            return
+        
+        registration = db.get_registration_by_id(reg_id)
+        if not registration:
+            update.message.reply_text(f"❌ Заявка с ID {reg_id} не найдена.")
+            return
+        
+        if db.update_registration_status(reg_id, 'confirmed'):
+            # Уведомляем пользователя
+            try:
+                bot.send_message(
+                    registration['telegram_id'],
+                    f"✅ *Ваша заявка подтверждена!*\n\n"
+                    f"ФИО: {registration['full_name']}\n"
+                    f"Оружие: {registration['weapon_type']}\n"
+                    f"Категория: {registration['category']}\n\n"
+                    f"Ждем вас на соревнованиях!",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя: {e}")
+            
+            update.message.reply_text(f"✅ Заявка ID {reg_id} подтверждена.")
+        else:
+            update.message.reply_text(f"❌ Ошибка при подтверждении заявки.")
+            
+    except (ValueError, IndexError):
+        update.message.reply_text("Используйте: /confirm <ID заявки>")
+
+@admin_required
+def reject_registration_cmd(update: Update, context: CallbackContext):
+    try:
+        reg_id = int(context.args[0]) if context.args else None
+        if not reg_id:
+            update.message.reply_text("Используйте: /reject <ID заявки>")
+            return
+        
+        registration = db.get_registration_by_id(reg_id)
+        if not registration:
+            update.message.reply_text(f"❌ Заявка с ID {reg_id} не найдена.")
+            return
+        
+        if db.update_registration_status(reg_id, 'rejected'):
+            # Уведомляем пользователя
+            try:
+                bot.send_message(
+                    registration['telegram_id'],
+                    f"❌ *Ваша заявка отклонена.*\n\n"
+                    f"ФИО: {registration['full_name']}\n"
+                    f"Оружие: {registration['weapon_type']}\n\n"
+                    f"По вопросам обращайтесь к администраторам.",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                logger.error(f"Не удалось уведомить пользователя: {e}")
+            
+            update.message.reply_text(f"❌ Заявка ID {reg_id} отклонена.")
+        else:
+            update.message.reply_text(f"❌ Ошибка при отклонении заявки.")
+            
+    except (ValueError, IndexError):
+        update.message.reply_text("Используйте: /reject <ID заявки>")
+
+# Обработчики быстрых команд (confirm_1, reject_1 и т.д.)
+def create_quick_command_handler(command_type):
+    def handler(update: Update, context: CallbackContext):
+        if not db.is_admin(update.effective_user.id):
+            update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        
+        try:
+            reg_id = int(update.message.text.split('_')[1])
+            registration = db.get_registration_by_id(reg_id)
+            if not registration:
+                update.message.reply_text(f"❌ Заявка с ID {reg_id} не найдена.")
+                return
+            
+            new_status = 'confirmed' if command_type == 'confirm' else 'rejected'
+            if db.update_registration_status(reg_id, new_status):
+                # Уведомляем пользователя
+                status_text = "подтверждена" if command_type == 'confirm' else "отклонена"
+                emoji = "✅" if command_type == 'confirm' else "❌"
+                
+                try:
+                    bot.send_message(
+                        registration['telegram_id'],
+                        f"{emoji} *Ваша заявка {status_text}!*\n\n"
+                        f"ФИО: {registration['full_name']}\n"
+                        f"Оружие: {registration['weapon_type']}\n"
+                        f"Категория: {registration['category']}",
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось уведомить пользователя: {e}")
+                
+                update.message.reply_text(f"{emoji} Заявка ID {reg_id} {status_text}.")
+            else:
+                update.message.reply_text(f"❌ Ошибка при обработке заявки.")
+                
+        except (ValueError, IndexError):
+            update.message.reply_text("❌ Неверный формат команды.")
+    
+    return handler
+
+# Обработчик текстовых команд админ-панели
+def admin_text_handler(update: Update, context: CallbackContext):
+    if not db.is_admin(update.effective_user.id):
+        return
+    
+    text = update.message.text
+    if text == "📊 Статистика":
+        admin_stats(update, context)
+    elif text == "📋 Список заявок":
+        admin_list(update, context)
+    elif text == "⏳ Ожидающие":
+        admin_pending(update, context)
+    elif text == "✅ Подтвержденные":
+        admin_confirmed(update, context)
+    elif text == "📝 Новая регистрация":
+        update.message.reply_text(
+            "Для начала регистрации отправьте /start",
+            reply_markup=None
+        )
+
 # === Настройка обработчиков ===
 if bot and dispatcher:
+    # Основной диалог регистрации
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
         states={
@@ -326,7 +543,21 @@ if bot and dispatcher:
     )
     
     dispatcher.add_handler(conv_handler)
-    dispatcher.add_handler(CommandHandler('stats', stats_command))
+    
+    # Админские команды
+    dispatcher.add_handler(CommandHandler('stats', admin_stats))
+    dispatcher.add_handler(CommandHandler('list', admin_list))
+    dispatcher.add_handler(CommandHandler('pending', admin_pending))
+    dispatcher.add_handler(CommandHandler('confirmed', admin_confirmed))
+    dispatcher.add_handler(CommandHandler('confirm', confirm_registration_cmd))
+    dispatcher.add_handler(CommandHandler('reject', reject_registration_cmd))
+    
+    # Быстрые команды (confirm_1, reject_1 и т.д.)
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'^/confirm_\d+$'), create_quick_command_handler('confirm')))
+    dispatcher.add_handler(MessageHandler(Filters.regex(r'^/reject_\d+$'), create_quick_command_handler('reject')))
+    
+    # Обработчик текстовых команд админ-панели
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, admin_text_handler))
 
 # === Flask маршруты ===
 @app.route('/')
@@ -337,7 +568,7 @@ def home():
         "registrations_count": len(db.registrations),
         "active_admins": len(db.admins),
         "telegram_bot": bot is not None,
-        "version": "3.0"
+        "version": "4.0"
     })
 
 @app.route('/admin')
