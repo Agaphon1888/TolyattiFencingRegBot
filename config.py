@@ -25,21 +25,6 @@ class Config:
     ADMIN_ROLES = ['admin', 'moderator']
 
     @classmethod
-    def validate_config(cls):
-        errors = []
-        if not cls.TELEGRAM_TOKEN:
-            errors.append("TELEGRAM_TOKEN не установлен")
-        if not cls.WEBHOOK_URL:
-            errors.append("WEBHOOK_URL не установлен")
-        if not cls.DATABASE_URL:
-            errors.append("DATABASE_URL не установлен")
-        if not cls.ADMIN_TELEGRAM_IDS:
-            errors.append("ADMIN_TELEGRAM_IDS не установлен")
-        if errors:
-            raise ValueError("Ошибки конфигурации:\n" + "\n".join(errors))
-        return True
-
-    @classmethod
     def get_admin_ids(cls):
         if not cls.ADMIN_TELEGRAM_IDS:
             return []
@@ -50,11 +35,7 @@ class Config:
         return f"{cls.WEBHOOK_URL.rstrip('/')}/webhook"
 
     @classmethod
-    def get_base_url(cls):
-        return cls.WEBHOOK_URL.rstrip('/')
-
-    @classmethod
     def to_dict(cls):
         return {k: v for k, v in cls.__dict__.items() if not k.startswith('_') and not callable(v)}
 
-config = Config()  # ⚠️ Важно: экспортируем как объект `config`
+config = Config()
