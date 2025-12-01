@@ -1,14 +1,13 @@
-from flask import Flask, request, jsonify, render_template, redirect, url_for, session
-from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
 import logging
-import os
-from datetime import datetime, timedelta
-import json
 from config import config
-from database import init_db, get_session, Registration, Admin, get_db_stats
-from sqlalchemy import and_
+from database import init_db, get_session, Registration, Admin
+from sqlalchemy import or_
 import secrets
+import json
+from datetime import datetime, timedelta
 
 # ===== Инициализация приложения =====
 app = Flask(__name__)
@@ -21,13 +20,11 @@ init_db()
 logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
 logger = logging.getLogger(__name__)
 
+# Инициализация бота
+bot = Bot(token=config.TELEGRAM_TOKEN)
+
 # ===== Состояния разговора =====
 NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
-
-# ===== Глобальные переменные =====
-bot = Bot(token=config.TELEGRAM_TOKEN)
-dispatcher = Dispatcher(bot, None, workers=0)
-
 
 # ===== Telegram-обработчики =====
 def start(update: Update, context: CallbackContext) -> int:
@@ -48,7 +45,6 @@ def get_name(update: Update, context: CallbackContext) -> int:
 
     keyboard = [[weapon] for weapon in config.WEAPON_TYPES]
     reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
-
     update.message.reply_text('Выберите вид оружия:', reply_markup=reply_markup)
     return WEAPON
 
@@ -93,7 +89,6 @@ def get_age(update: Update, context: CallbackContext) -> int:
 def get_phone(update: Update, context: CallbackContext) -> int:
     phone = update.message.contact.phone_number if update.message.contact else update.message.text
     context.user_data['phone'] = phone
-
     update.message.reply_text('Расскажите о вашем опыте (разряд, стаж, соревнования):')
     return EXPERIENCE
 
@@ -140,9 +135,9 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
         )
         session_db.add(reg)
         session_db.commit()
-        update.message.reply_text('✅ Заявка отправлена! Статус можно посмотреть позже.', reply_markup=None)
+        update.message.reply_text('✅ Заявка отправлена!', reply_markup=None)
     except Exception as e:
-        logger.error(f"Ошибка сохранения регистрации: {e}")
+        logger.error(f"Ошибка сохранения: {e}")
         update.message.reply_text('❌ Ошибка отправки заявки.', reply_markup=None)
     finally:
         session_db.close()
@@ -176,44 +171,24 @@ def index():
     return redirect(url_for('admin_panel'))
 
 
-@app.route('/admin')
-def admin_login():
-    token = request.args.get('token')
-    if not token or token != session.get('admin_token'):
-        return redirect(url_for('admin_panel'))
-    return redirect(url_for('admin_panel'))
-
-
 @app.route('/admin_panel')
 def admin_panel():
     token = request.args.get('token') or session.get('admin_token')
-    current_admin_id = session.get('admin_id') if token == session.get('admin_token') else None
+    current_admin_id = session.get('admin_id')
 
-    if token and token == session.get('admin_token'):
-        session['admin_token'] = token
-        session['last_activity'] = datetime.utcnow()
-    elif token:
-        # Проверка временного токена
-        if token.startswith("temp_"):
-            session['admin_token'] = token
-            session['admin_id'] = config.get_admin_ids()[0]
-            session['last_activity'] = datetime.utcnow()
-
-    if not session.get('admin_token'):
+    # Проверка токена
+    if not token or token != session.get('admin_token'):
         return redirect(f"https://t.me/TolyattiFencingRegBot?start=admin_auth")
 
-    # Проверка срока действия токена
     if datetime.utcnow() > session.get('last_activity', datetime.min) + timedelta(seconds=config.ADMIN_TOKEN_EXPIRE):
         session.clear()
         return redirect(url_for('admin_panel'))
 
     session['last_activity'] = datetime.utcnow()
 
-    # Получение данных
     session_db = get_session()
     try:
         registrations = session_db.query(Registration).all()
-        stats = get_db_stats()
         return render_template(
             'admin.html',
             registrations=registrations,
@@ -288,7 +263,7 @@ def show_config():
 @app.route('/webhook', methods=['POST'])
 def webhook():
     update = Update.de_json(request.get_json(), bot)
-    dispatcher.process_update(update)
+    dp.process_update(update)
     return 'ok'
 
 
@@ -317,11 +292,13 @@ def setup_dispatcher():
         fallbacks=[CommandHandler('cancel', cancel)]
     )
 
-    dispatcher.add_handler(conv_handler)
-    dispatcher.add_handler(CommandHandler('myregistrations', view_registrations))
+    dp = Dispatcher(bot, None, workers=0)
+    dp.add_handler(conv_handler)
+    dp.add_handler(CommandHandler('myregistrations', view_registrations))
+    return dp
 
 
-setup_dispatcher()
+dp = setup_dispatcher()
 
 # ===== Запуск =====
 if __name__ == '__main__':
