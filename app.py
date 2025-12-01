@@ -9,7 +9,7 @@ from database import init_db, get_session, Registration, Admin
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
-# Инициализация БД
+# Инициализация базы данных
 init_db()
 
 # Логирование
@@ -198,7 +198,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
     try:
         reg = Registration(
             telegram_id=data['telegram_id'],
-            username=data['username'],
+            username=data.get('username'),
             full_name=data['full_name'],
             weapon_type=data['weapon_type'],
             category=data['category'],
@@ -211,7 +211,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
         session_db.commit()
         update.message.reply_text("✅ Заявка отправлена!", reply_markup=None)
     except Exception as e:
-        logger.error(e)
+        logger.error(f"Ошибка сохранения: {e}")
         update.message.reply_text("❌ Ошибка.")
     finally:
         session_db.close()
