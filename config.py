@@ -1,4 +1,5 @@
 import os
+import sys
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,14 +29,49 @@ class Config:
     def get_admin_ids(cls):
         if not cls.ADMIN_TELEGRAM_IDS:
             return []
-        return [int(id.strip()) for id in cls.ADMIN_TELEGRAM_IDS.split(',') if id.strip().isdigit()]
+        try:
+            return [int(id.strip()) for id in cls.ADMIN_TELEGRAM_IDS.split(',') if id.strip().isdigit()]
+        except:
+            return []
 
     @classmethod
     def get_webhook_url(cls):
+        if not cls.WEBHOOK_URL:
+            return ''
         return f"{cls.WEBHOOK_URL.rstrip('/')}/webhook"
 
     @classmethod
     def to_dict(cls):
         return {k: v for k, v in cls.__dict__.items() if not k.startswith('_') and not callable(v)}
 
+    @classmethod
+    def validate(cls):
+        """Проверка конфигурации"""
+        errors = []
+        
+        if not cls.TELEGRAM_TOKEN:
+            errors.append("TELEGRAM_TOKEN не установлен")
+        
+        if not cls.WEBHOOK_URL:
+            errors.append("WEBHOOK_URL не установлен")
+        
+        if not cls.DATABASE_URL:
+            errors.append("DATABASE_URL не установлен")
+        
+        if not cls.SECRET_KEY or cls.SECRET_KEY == 'dev-secret-key':
+            print("⚠️  Внимание: используется стандартный SECRET_KEY")
+        
+        if errors:
+            print("❌ Ошибки конфигурации:")
+            for error in errors:
+                print(f"   - {error}")
+            if not os.environ.get('RENDER'):
+                print("🚨 Приложение остановлено из-за ошибок конфигурации")
+                sys.exit(1)
+            else:
+                print("⚠️  Работаем с ошибками конфигурации...")
+        
+        return len(errors) == 0
+
 config = Config()
+config.validate()
