@@ -9,7 +9,7 @@ from database import init_db, get_session, Registration, Admin
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
-# Инициализация базы данных
+# Инициализация БД
 init_db()
 
 # Логирование
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 # Бот
 bot = Bot(token=config.TELEGRAM_TOKEN)
 
-# ===== Состояния разговора =====
+# ===== Состояния =====
 NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
 
 # ===== Декораторы =====
@@ -32,9 +32,9 @@ def admin_required(func):
             if not admin:
                 update.message.reply_text("❌ У вас нет прав администратора.")
                 return
-            return func(update, context)
         finally:
             session_db.close()
+        return func(update, context)
     return wrapper
 
 
@@ -62,7 +62,7 @@ def admin_stats(update: Update, context: CallbackContext):
         stats = f"""
 📊 *Статистика:*
 
-• Всего заявок: {total}
+• Всего: {total}
 • Ожидают: {pending}
 • Подтверждены: {confirmed}
 • Отклонены: {rejected}
@@ -78,7 +78,7 @@ def admin_add(update: Update, context: CallbackContext):
         update.message.reply_text("Использование: /admin_add <telegram_id> [роль]")
         return
     try:
-        telegram_id = int(context.args[0])
+        tid = int(context.args[0])
         role = context.args[1] if len(context.args) > 1 else 'moderator'
         if role not in ['admin', 'moderator']:
             update.message.reply_text("Роль: 'admin' или 'moderator'")
@@ -86,20 +86,14 @@ def admin_add(update: Update, context: CallbackContext):
 
         session_db = get_session()
         try:
-            if session_db.query(Admin).filter_by(telegram_id=telegram_id).first():
+            if session_db.query(Admin).filter_by(telegram_id=tid).first():
                 update.message.reply_text("⚠️ Уже является админом.")
                 return
 
-            new_admin = Admin(
-                telegram_id=telegram_id,
-                username=f"user_{telegram_id}",
-                full_name="Добавлен ботом",
-                role=role,
-                created_by=update.message.from_user.id
-            )
+            new_admin = Admin(telegram_id=tid, role=role, created_by=update.message.from_user.id)
             session_db.add(new_admin)
             session_db.commit()
-            update.message.reply_text(f"✅ Админ {telegram_id} добавлен как {role}")
+            update.message.reply_text(f"✅ Админ {tid} добавлен как {role}")
         finally:
             session_db.close()
     except ValueError:
@@ -135,7 +129,7 @@ def get_name(update: Update, context: CallbackContext) -> int:
     context.user_data['full_name'] = update.message.text
     kb = [[w] for w in config.WEAPON_TYPES]
     rm = ReplyKeyboardMarkup(kb, one_time_keyboard=True)
-    update.message.reply_text("Выберите оружие:", reply_markup=rm)
+    update.message.reply_text("Оружие:", reply_markup=rm)
     return WEAPON
 
 
@@ -239,7 +233,7 @@ def view_registrations(update: Update, context: CallbackContext):
         session_db.close()
 
 
-# ===== Настройка диспетчера =====
+# ===== Диспетчер =====
 def setup_dispatcher():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
