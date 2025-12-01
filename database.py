@@ -16,7 +16,7 @@ Base = declarative_base()
 class Registration(Base):
     __tablename__ = 'registrations'
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    telegram_id = Column(BigInteger, nullable=False)
+    telegram_id = Column(BigInteger, nullable=False)  # BigInteger!
     username = Column(String(100))
     full_name = Column(String(200), nullable=False)
     weapon_type = Column(String(50), nullable=False)
@@ -32,13 +32,13 @@ class Registration(Base):
 class Admin(Base):
     __tablename__ = 'admins'
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    telegram_id = Column(BigInteger, unique=True, nullable=False)
+    telegram_id = Column(BigInteger, unique=True, nullable=False)  # BigInteger!
     username = Column(String(100))
     full_name = Column(String(200))
     role = Column(String(50), default='moderator')
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    created_by = Column(BigInteger)
+    created_by = Column(BigInteger)  # Для совместимости
 
 
 engine = None
@@ -63,6 +63,7 @@ def init_db():
 def fix_admin_table_schema():
     session = SessionLocal()
     try:
+        # Убедимся, что колонка created_at существует
         result = session.execute("""
             SELECT column_name FROM information_schema.columns 
             WHERE table_name = 'admins' AND column_name = 'created_at'
@@ -83,7 +84,8 @@ def initialize_super_admins():
     session = SessionLocal()
     try:
         for tid in admin_ids:
-            if not session.query(Admin).filter_by(telegram_id=tid).first():
+            existing = session.query(Admin).filter_by(telegram_id=tid).first()
+            if not existing:
                 admin = Admin(
                     telegram_id=tid,
                     username='admin',
