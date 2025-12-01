@@ -425,6 +425,7 @@ def admin_list(update: Update, context: CallbackContext):
 
 # ===== Настройка диспетчера Telegram =====
 def setup_dispatcher():
+    """Настройка диспетчера Telegram"""
     bot = get_bot()
     if not bot:
         logger.error("❌ Не удалось инициализировать бота для диспетчера")
@@ -445,7 +446,8 @@ def setup_dispatcher():
         allow_reentry=True
     )
 
-    dp = Dispatcher(bot, None, workers=0, use_context=True)
+    # Изменяем workers с 0 на 1
+    dp = Dispatcher(bot, None, workers=1, use_context=True)
     dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler('help', help_command))
     dp.add_handler(CommandHandler('myregistrations', view_registrations))
