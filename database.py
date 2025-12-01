@@ -1,6 +1,6 @@
 import os
 import logging
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, inspect
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -114,9 +114,8 @@ def init_db():
             echo=config.DEBUG
         )
         
-        # Создаём таблицы, если их нет
-        Base.metadata.create_all(bind=engine)
-        logger.info("✅ Таблицы проверены/созданы")
+        # Проверяем и создаем таблицы с миграцией
+        migrate_database()
         
         # Создаём фабрику сессий
         SessionLocal = scoped_session(sessionmaker(
@@ -136,6 +135,45 @@ def init_db():
     except Exception as e:
         logger.critical(f"🔴 Неизвестная ошибка при инициализации БД: {e}")
         raise
+
+def migrate_database():
+    """Миграция базы данных - создание таблиц и добавление отсутствующих колонок"""
+    inspector = inspect(engine)
+    
+    # Создаем таблицы если их нет
+    Base.metadata.create_all(bind=engine)
+    logger.info("✅ Основные таблицы проверены/созданы")
+    
+    # Проверяем и добавляем отсутствующие колонки в таблицу admins
+    if 'admins' in inspector.get_table_names():
+        existing_columns = [col['name'] for col in inspector.get_columns('admins')]
+        required_columns = ['id', 'telegram_id', 'username', 'full_name', 'role', 'is_active', 'created_at', 'created_by']
+        
+        with engine.connect() as conn:
+            # Добавляем отсутствующие колонки
+            if 'username' not in existing_columns:
+                conn.execute('ALTER TABLE admins ADD COLUMN username VARCHAR(100)')
+                logger.info("✅ Добавлена колонка 'username' в таблицу 'admins'")
+            
+            if 'full_name' not in existing_columns:
+                conn.execute('ALTER TABLE admins ADD COLUMN full_name VARCHAR(200)')
+                logger.info("✅ Добавлена колонка 'full_name' в таблицу 'admins'")
+            
+            if 'role' not in existing_columns:
+                conn.execute('ALTER TABLE admins ADD COLUMN role VARCHAR(50) DEFAULT \'moderator\'')
+                logger.info("✅ Добавлена колонка 'role' в таблицу 'admins'")
+            
+            if 'is_active' not in existing_columns:
+                conn.execute('ALTER TABLE admins ADD COLUMN is_active BOOLEAN DEFAULT true')
+                logger.info("✅ Добавлена колонка 'is_active' в таблицу 'admins'")
+            
+            if 'created_by' not in existing_columns:
+                conn.execute('ALTER TABLE admins ADD COLUMN created_by INTEGER')
+                logger.info("✅ Добавлена колонка 'created_by' в таблицу 'admins'")
+            
+            conn.commit()
+    else:
+        logger.info("✅ Таблица 'admins' создана с нуля")
 
 @contextmanager
 def db_session():
