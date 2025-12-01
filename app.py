@@ -1,12 +1,10 @@
-from flask import Flask, request, jsonify, render_template, session, redirect, url_for
-from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
+from flask import Flask, request, jsonify, render_template_string, session, redirect, url_for
+from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import Dispatcher, CallbackContext, CommandHandler, MessageHandler, Filters, ConversationHandler
 import logging
 from config import config
-from database import init_db, get_session, Registration, Admin
-from sqlalchemy import or_
+from database import init_db, get_session, Registration
 import secrets
-import json
 from datetime import datetime, timedelta
 
 # ===== Инициализация приложения =====
@@ -23,12 +21,11 @@ logger = logging.getLogger(__name__)
 # Инициализация бота
 bot = Bot(token=config.TELEGRAM_TOKEN)
 
-# ===== Состояния разговора =====
+# ===== Состояния диалога =====
 NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
 
-# ===== Telegram-обработчики =====
+# ===== Telegram Handlers =====
 def start(update: Update, context: CallbackContext) -> int:
-    """Начало регистрации"""
     user = update.effective_user
     context.user_data['telegram_id'] = user.id
     context.user_data['username'] = user.username
@@ -165,115 +162,38 @@ def view_registrations(update: Update, context: CallbackContext):
         session_db.close()
 
 
-# ===== Веб-интерфейс (Flask) =====
-@app.route('/')
-def index():
-    return redirect(url_for('admin_panel'))
+# ===== Админ-команды (пример) =====
+def admin_required(func):
+    def wrapper(update: Update, context: CallbackContext):
+        user_id = update.effective_user.id
+        if user_id not in config.get_admin_ids():
+            update.message.reply_text("❌ У вас нет прав администратора.")
+            return
+        return func(update, context)
+    return wrapper
 
 
-@app.route('/admin_panel')
-def admin_panel():
-    token = request.args.get('token') or session.get('admin_token')
-    current_admin_id = session.get('admin_id')
-
-    # Проверка токена
-    if not token or token != session.get('admin_token'):
-        return redirect(f"https://t.me/TolyattiFencingRegBot?start=admin_auth")
-
-    if datetime.utcnow() > session.get('last_activity', datetime.min) + timedelta(seconds=config.ADMIN_TOKEN_EXPIRE):
-        session.clear()
-        return redirect(url_for('admin_panel'))
-
-    session['last_activity'] = datetime.utcnow()
-
+@admin_required
+def admin_stats(update: Update, context: CallbackContext):
     session_db = get_session()
     try:
-        registrations = session_db.query(Registration).all()
-        return render_template(
-            'admin.html',
-            registrations=registrations,
-            config=config,
-            current_admin_id=current_admin_id,
-            token=session['admin_token'],
-            now=datetime.utcnow()
-        )
+        regs = session_db.query(Registration).all()
+        total = len(regs)
+        pending = len([r for r in regs if r.status == 'pending'])
+        confirmed = len([r for r in regs if r.status == 'confirmed'])
+        rejected = len([r for r in regs if r.status == 'rejected'])
+
+        stats = f"""
+📊 *Статистика:*
+
+• Всего заявок: {total}
+• Ожидают: {pending}
+• Подтверждены: {confirmed}
+• Отклонены: {rejected}
+"""
+        update.message.reply_text(stats, parse_mode='Markdown')
     finally:
         session_db.close()
-
-
-@app.route('/api/registrations/<int:reg_id>/confirm', methods=['POST'])
-def confirm_api(reg_id):
-    token = request.args.get('token')
-    if not token or token != session.get('admin_token'):
-        return jsonify({'error': 'Unauthorized'}), 403
-
-    session_db = get_session()
-    try:
-        reg = session_db.query(Registration).filter_by(id=reg_id).first()
-        if not reg:
-            return jsonify({'error': 'Not found'}), 404
-        reg.status = 'confirmed'
-        session_db.commit()
-        return jsonify({'status': 'confirmed'})
-    except Exception as e:
-        logger.error(e)
-        return jsonify({'error': 'Server error'}), 500
-    finally:
-        session_db.close()
-
-
-@app.route('/api/registrations/<int:reg_id>/reject', methods=['POST'])
-def reject_api(reg_id):
-    token = request.args.get('token')
-    if not token or token != session.get('admin_token'):
-        return jsonify({'error': 'Unauthorized'}), 403
-
-    session_db = get_session()
-    try:
-        reg = session_db.query(Registration).filter_by(id=reg_id).first()
-        if not reg:
-            return jsonify({'error': 'Not found'}), 404
-        reg.status = 'rejected'
-        session_db.commit()
-        return jsonify({'status': 'rejected'})
-    except Exception as e:
-        logger.error(e)
-        return jsonify({'error': 'Server error'}), 500
-    finally:
-        session_db.close()
-
-
-@app.route('/test_data')
-def test_data():
-    from migrations import create_test_data
-    create_test_data()
-    return redirect(url_for('admin_panel'))
-
-
-@app.route('/health')
-def health():
-    return jsonify({'status': 'healthy'})
-
-
-@app.route('/config')
-def show_config():
-    return jsonify(config.to_dict())
-
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(), bot)
-    dp.process_update(update)
-    return 'ok'
-
-
-@app.route('/set_webhook')
-def set_webhook_route():
-    try:
-        bot.set_webhook(config.get_webhook_url())
-        return 'Webhook установлен'
-    except Exception as e:
-        return f'Ошибка: {e}'
 
 
 # ===== Настройка диспетчера =====
@@ -295,10 +215,121 @@ def setup_dispatcher():
     dp = Dispatcher(bot, None, workers=0)
     dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler('myregistrations', view_registrations))
+    dp.add_handler(CommandHandler('admin_stats', admin_stats))  # Добавьте другие команды
     return dp
 
 
 dp = setup_dispatcher()
+
+# ===== Веб-интерфейс =====
+ADMIN_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Админ-панель</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .status-pending { color: orange; }
+        .status-confirmed { color: green; }
+        .status-rejected { color: red; }
+    </style>
+</head>
+<body>
+    <h1>Заявки на участие</h1>
+    <p><strong>Всего заявок:</strong> {{ registrations|length }}</p>
+    <a href="{{ url_for('test_data') }}">➕ Добавить тестовые данные</a> | 
+    <a href="{{ url_for('admin_panel') }}?token={{ token }}">🔄 Обновить</a>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>ФИО</th>
+                <th>Оружие</th>
+                <th>Категория</th>
+                <th>Возраст</th>
+                <th>Телефон</th>
+                <th>Опыт</th>
+                <th>Статус</th>
+                <th>Дата</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for reg in registrations %}
+            <tr>
+                <td>{{ reg.id }}</td>
+                <td>{{ reg.full_name }}</td>
+                <td>{{ reg.weapon_type }}</td>
+                <td>{{ reg.category }}</td>
+                <td>{{ reg.age_group }}</td>
+                <td>{{ reg.phone }}</td>
+                <td>{{ reg.experience }}</td>
+                <td class="status-{{ reg.status }}">{{ reg.status }}</td>
+                <td>{{ reg.created_at.strftime('%d.%m %H:%M') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
+"""
+
+
+@app.route('/')
+def index():
+    return redirect(url_for('admin_panel'))
+
+
+@app.route('/admin_panel')
+def admin_panel():
+    token = request.args.get('token') or session.get('admin_token')
+    if not token or token != session.get('admin_token'):
+        return redirect(f"https://t.me/TolyattiFencingRegBot?start=admin_auth")
+    session['last_activity'] = datetime.utcnow()
+    session['admin_token'] = token
+
+    if datetime.utcnow() > session.get('last_activity', datetime.min) + timedelta(seconds=config.ADMIN_TOKEN_EXPIRE):
+        session.clear()
+        return redirect(url_for('admin_panel'))
+
+    session_db = get_session()
+    try:
+        regs = session_db.query(Registration).all()
+        return render_template_string(ADMIN_TEMPLATE, registrations=regs, token=token)
+    finally:
+        session_db.close()
+
+
+@app.route('/test_data')
+def test_data():
+    from migrations import create_test_data
+    create_test_data()
+    return redirect(url_for('admin_panel'))
+
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(), bot)
+    dp.process_update(update)
+    return 'ok'
+
+
+@app.route('/set_webhook')
+def set_webhook_route():
+    try:
+        bot.set_webhook(config.get_webhook_url())
+        return 'Webhook установлен'
+    except Exception as e:
+        return f'Ошибка: {e}'
+
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'healthy'})
+
 
 # ===== Запуск =====
 if __name__ == '__main__':
