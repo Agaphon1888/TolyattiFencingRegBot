@@ -1,13 +1,17 @@
-# database.py
 import os
 import logging
-from sqlalchemy import create_engine, Column, Integer, String, Boolean
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
+from datetime import datetime
+from contextlib import contextmanager
+
+# Импорт конфигурации
+from config import config
 
 # Настройка логирования
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
 logger = logging.getLogger(__name__)
 
 # Базовый класс для моделей
@@ -19,17 +23,36 @@ class Registration(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(Integer, nullable=False)
-    full_name = Column(String, nullable=False)
-    weapon_type = Column(String, nullable=False)  # фехтование на рапирах, шпагах и т.д.
-    category = Column(String, nullable=False)     # начинающий, продвинутый
-    age_group = Column(String, nullable=False)    # детская, юношеская, взрослая
-    phone = Column(String, nullable=False)
-    experience = Column(String, nullable=False)   # опыт фехтования
-    status = Column(String, default='pending')    # pending, confirmed, rejected
-    admin_comment = Column(String, nullable=True)
+    username = Column(String(100))
+    full_name = Column(String(200), nullable=False)
+    weapon_type = Column(String(50), nullable=False)
+    category = Column(String(50), nullable=False)
+    age_group = Column(String(50), nullable=False)
+    phone = Column(String(20), nullable=False)
+    experience = Column(Text, nullable=False)
+    status = Column(String(20), default='pending')
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     def __repr__(self):
         return f"<Registration(id={self.id}, name='{self.full_name}', status='{self.status}')>"
+
+    def to_dict(self):
+        """Конвертация в словарь"""
+        return {
+            'id': self.id,
+            'telegram_id': self.telegram_id,
+            'username': self.username,
+            'full_name': self.full_name,
+            'weapon_type': self.weapon_type,
+            'category': self.category,
+            'age_group': self.age_group,
+            'phone': self.phone,
+            'experience': self.experience,
+            'status': self.status,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
 
 # === Модель администраторов ===
 class Admin(Base):
@@ -37,74 +60,161 @@ class Admin(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(Integer, unique=True, nullable=False)
-    full_name = Column(String, nullable=True)
-    phone = Column(String, nullable=True)
-    role = Column(String, default='moderator')  # moderator, admin
+    username = Column(String(100))
+    full_name = Column(String(200))
+    role = Column(String(50), default='moderator')
     is_active = Column(Boolean, default=True)
-    added_by = Column(Integer, nullable=True)  # кто добавил этого админа
+    created_at = Column(DateTime, default=datetime.utcnow)
+    created_by = Column(Integer)
 
     def __repr__(self):
-        return f"<Admin(id={self.telegram_id}, role='{self.role}', active={self.is_active})>"
+        return f"<Admin(telegram_id={self.telegram_id}, role='{self.role}', active={self.is_active})>"
 
-# === Класс управления базой данных ===
-class Database:
-    def __init__(self):
-        # Получаем URL базы из переменной окружения
-        self.db_url = os.getenv("DATABASE_URL")
-        
-        # Проверка, установлена ли переменная
-        if not self.db_url:
-            logger.critical("❌ Переменная окружения DATABASE_URL не установлена!")
-            raise RuntimeError("DATABASE_URL is not set. Check your environment variables in Render.")
+    def to_dict(self):
+        """Конвертация в словарь"""
+        return {
+            'id': self.id,
+            'telegram_id': self.telegram_id,
+            'username': self.username,
+            'full_name': self.full_name,
+            'role': self.role,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'created_by': self.created_by
+        }
 
-        # SQLAlchemy поддерживает только 'postgresql://', а не 'postgres://'
-        if self.db_url.startswith("postgres://"):
-            self.db_url = self.db_url.replace("postgres://", "postgresql://", 1)
-            logger.info("🔄 Обновлён URL с 'postgres://' на 'postgresql://'")
-
-        logger.info(f"🔗 Подключение к базе данных: {self.db_url.split('@')[-1].split('/')[0]}")  # логируем хост
-
-        try:
-            # Создаём движок
-            self.engine = create_engine(
-                self.db_url,
-                pool_pre_ping=True,        # Проверяет соединение перед использованием
-                pool_recycle=300,          # Пересоздаёт соединения каждые 5 минут
-                echo=False                 # Отключаем SQL-логи (включите для отладки)
-            )
-
-            # Создаём таблицы, если их нет
-            Base.metadata.create_all(self.engine)
-            logger.info("✅ Таблицы проверены/созданы")
-
-            # Создаём сессию
-            Session = sessionmaker(bind=self.engine)
-            self.session = Session()
-            logger.info("🟢 Подключение к базе данных успешно установлено")
-
-        except SQLAlchemyError as e:
-            logger.critical(f"🔴 Ошибка подключения к базе данных: {e}")
-            raise
-        except Exception as e:
-            logger.critical(f"🔴 Неизвестная ошибка при инициализации БД: {e}")
-            raise
-
-    def close(self):
-        """Закрытие сессии (вызывается при остановке бота)"""
-        if hasattr(self, 'session'):
-            self.session.close()
-            logger.info("🔒 Сессия базы данных закрыта")
-
-# === Глобальный экземпляр базы данных ===
-# Будет использоваться в app.py
-db = None
+# Глобальные объекты
+engine = None
+SessionLocal = None
 
 def init_db():
-    """Инициализация базы данных (вызывается в app.py)"""
-    global db
+    """Инициализация базы данных"""
+    global engine, SessionLocal
+    
+    # Получаем URL базы из конфигурации
+    db_url = config.DATABASE_URL
+    
+    if not db_url:
+        logger.critical("❌ DATABASE_URL не установлен в конфигурации!")
+        raise RuntimeError("DATABASE_URL is not set")
+    
+    # SQLAlchemy поддерживает только 'postgresql://', а не 'postgres://'
+    if db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+        logger.info("🔄 Обновлён URL с 'postgres://' на 'postgresql://'")
+    
     try:
-        db = Database()
-        logger.info("📦 База данных инициализирована")
-    except Exception as e:
-        logger.critical(f"💥 Не удалось инициализировать базу данных: {e}")
+        # Создаём движок
+        engine = create_engine(
+            db_url,
+            pool_pre_ping=True,
+            pool_recycle=300,
+            pool_size=5,
+            max_overflow=10,
+            echo=config.DEBUG
+        )
+        
+        # Создаём таблицы, если их нет
+        Base.metadata.create_all(bind=engine)
+        logger.info("✅ Таблицы проверены/созданы")
+        
+        # Создаём фабрику сессий
+        SessionLocal = scoped_session(sessionmaker(
+            autocommit=False,
+            autoflush=False,
+            bind=engine
+        ))
+        
+        # Инициализируем супер-админов
+        initialize_super_admins()
+        
+        logger.info("🟢 База данных успешно инициализирована")
+        
+    except SQLAlchemyError as e:
+        logger.critical(f"🔴 Ошибка подключения к базе данных: {e}")
         raise
+    except Exception as e:
+        logger.critical(f"🔴 Неизвестная ошибка при инициализации БД: {e}")
+        raise
+
+@contextmanager
+def db_session():
+    """Контекстный менеджер для работы с сессиями (старый интерфейс)"""
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Ошибка в сессии БД: {e}")
+        raise
+    finally:
+        session.close()
+
+def get_session():
+    """Получение новой сессии"""
+    return SessionLocal()
+
+def initialize_super_admins():
+    """Инициализирует супер-админов из конфигурации"""
+    admin_ids = config.get_admin_ids()
+    if not admin_ids:
+        logger.warning("⚠️ ADMIN_TELEGRAM_IDS не установлен")
+        return
+    
+    session = SessionLocal()
+    try:
+        for telegram_id in admin_ids:
+            # Проверяем, нет ли уже такого администратора
+            existing = session.query(Admin).filter_by(telegram_id=telegram_id).first()
+            if not existing:
+                admin = Admin(
+                    telegram_id=telegram_id,
+                    username='super_admin',
+                    full_name='Супер Администратор',
+                    role='admin',
+                    is_active=True,
+                    created_by=0  # System
+                )
+                session.add(admin)
+                logger.info(f"✅ Добавлен супер-админ: {telegram_id}")
+            elif not existing.is_active:
+                existing.is_active = True
+                existing.role = 'admin'
+                logger.info(f"✅ Активирован супер-админ: {telegram_id}")
+        
+        session.commit()
+        
+    except Exception as e:
+        session.rollback()
+        logger.error(f"❌ Ошибка при инициализации админов: {e}")
+        raise
+    finally:
+        session.close()
+
+def get_db_stats():
+    """Получение статистики базы данных"""
+    session = SessionLocal()
+    try:
+        total_reg = session.query(Registration).count()
+        pending = session.query(Registration).filter_by(status='pending').count()
+        confirmed = session.query(Registration).filter_by(status='confirmed').count()
+        rejected = session.query(Registration).filter_by(status='rejected').count()
+        total_admins = session.query(Admin).filter_by(is_active=True).count()
+        
+        return {
+            'total_registrations': total_reg,
+            'pending': pending,
+            'confirmed': confirmed,
+            'rejected': rejected,
+            'total_admins': total_admins
+        }
+    finally:
+        session.close()
+
+def close_db():
+    """Закрытие соединения с базой данных"""
+    global engine
+    if engine:
+        engine.dispose()
+        logger.info("🔒 Соединение с базой данных закрыто")
