@@ -6,7 +6,7 @@ load_dotenv()
 class Config:
     TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN', '')
     WEBHOOK_URL = os.environ.get('WEBHOOK_URL', '')
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key-change-in-production')
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-key')
     ADMIN_TOKEN_EXPIRE = int(os.environ.get('ADMIN_TOKEN_EXPIRE', 3600))
 
     ADMIN_TELEGRAM_IDS = os.environ.get('ADMIN_TELEGRAM_IDS', '')
@@ -57,4 +57,4 @@ class Config:
     def to_dict(cls):
         return {k: v for k, v in cls.__dict__.items() if not k.startswith('_') and not callable(v)}
 
-config = Config()
+config = Config()  # ⚠️ Важно: экспортируем как объект `config`
