@@ -6,13 +6,12 @@
 import os
 import sys
 from datetime import datetime
-from sqlalchemy import text, inspect
 
 # Добавляем текущую директорию в путь
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from config import config
-from database import init_db, get_session, Registration, Admin, engine
+from database import init_db, get_session, Registration, Admin
 
 def run_migrations():
     """Запуск миграций"""
@@ -20,45 +19,9 @@ def run_migrations():
     
     try:
         # Инициализируем базу данных
-        from database import migrate_database, initialize_super_admins
-        migrate_database()
+        init_db()
+        print("✅ База данных инициализирована")
         
-        session = get_session()
-        try:
-            count = session.query(Registration).count()
-            print(f"✅ Таблицы созданы. Записей в базе: {count}")
-            
-            # Инициализируем супер-админов
-            initialize_super_admins()
-            
-            # Проверяем наличие админов
-            admin_count = session.query(Admin).count()
-            print(f"✅ Администраторов в базе: {admin_count}")
-            
-            # Создаем индексы для быстрого поиска
-            indexes = [
-                "CREATE INDEX IF NOT EXISTS idx_status ON registrations(status)",
-                "CREATE INDEX IF NOT EXISTS idx_telegram_id ON registrations(telegram_id)",
-                "CREATE INDEX IF NOT EXISTS idx_created_at ON registrations(created_at DESC)",
-                "CREATE INDEX IF NOT EXISTS idx_weapon_type ON registrations(weapon_type)",
-                "CREATE INDEX IF NOT EXISTS idx_category ON registrations(category)",
-                "CREATE INDEX IF NOT EXISTS idx_admin_telegram_id ON admins(telegram_id)",
-                "CREATE INDEX IF NOT EXISTS idx_admin_active ON admins(is_active)"
-            ]
-            
-            for idx_sql in indexes:
-                try:
-                    session.execute(text(idx_sql))
-                    print(f"  ✅ Индекс создан: {idx_sql.split('IF NOT EXISTS ')[1].split(' ON')[0]}")
-                except Exception as e:
-                    print(f"  ⚠️  Не удалось создать индекс: {e}")
-            
-            session.commit()
-            print("✅ Индексы созданы")
-            
-        finally:
-            session.close()
-            
     except Exception as e:
         print(f"❌ Ошибка при миграциях: {e}")
         import traceback
@@ -122,6 +85,9 @@ def create_test_data():
         session.commit()
         print(f"✅ Добавлено {len(test_registrations)} тестовых записей")
         
+    except Exception as e:
+        print(f"❌ Ошибка создания тестовых данных: {e}")
+        session.rollback()
     finally:
         session.close()
 
@@ -148,6 +114,8 @@ def show_stats():
             role_icon = "👑" if admin.role == 'admin' else "🛡️"
             print(f"    {role_icon} ID {admin.telegram_id} ({admin.role})")
             
+    except Exception as e:
+        print(f"❌ Ошибка получения статистики: {e}")
     finally:
         session.close()
 
