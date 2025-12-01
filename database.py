@@ -199,9 +199,33 @@ def fix_database_schema():
         if 'registrations' in inspector.get_table_names():
             logger.info("✅ Таблица 'registrations' существует")
             
+            # Получаем информацию о колонках
+            columns = inspector.get_columns('registrations')
+            column_names = [col['name'] for col in columns]
+            logger.info(f"   Найдены колонки: {column_names}")
+            
+            # Проверяем и добавляем отсутствующие колонки
+            expected_columns = {
+                'username': 'VARCHAR(100)',
+                'updated_at': 'TIMESTAMP'
+            }
+            
+            for column_name, column_type in expected_columns.items():
+                if column_name not in column_names:
+                    logger.warning(f"   ⚠️ Колонка '{column_name}' не найдена, добавляем...")
+                    try:
+                        if column_name == 'updated_at':
+                            session.execute(text(f"ALTER TABLE registrations ADD COLUMN {column_name} {column_type} DEFAULT NOW()"))
+                        else:
+                            session.execute(text(f"ALTER TABLE registrations ADD COLUMN {column_name} {column_type}"))
+                        session.commit()
+                        logger.info(f"   ✅ Колонка '{column_name}' добавлена")
+                    except Exception as e:
+                        logger.error(f"   ❌ Ошибка добавления колонки '{column_name}': {e}")
+                        session.rollback()
+            
             # Создаем индексы если их нет
             indexes = inspector.get_indexes('registrations')
-            index_names = [idx['name'] for idx in indexes]
             
             # Индекс для telegram_id
             if not any('telegram_id' in idx.get('column_names', []) for idx in indexes):
