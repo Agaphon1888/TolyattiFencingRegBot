@@ -1,15 +1,15 @@
-from flask import Flask, request, jsonify, render_template_string, session
+from flask import Flask, request, jsonify, render_template_string
 from telegram import Update, Bot, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext, ConversationHandler
 import logging
 from config import config
 from database import init_db, get_session, Registration, Admin
 
-# ============== Инициализация приложения ==============
+# ===== Инициализация приложения =====
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
-# Инициализация БД
+# Инициализация базы данных
 init_db()
 
 # Логирование
@@ -19,10 +19,10 @@ logger = logging.getLogger(__name__)
 # Бот
 bot = Bot(token=config.TELEGRAM_TOKEN)
 
-# ============== Состояния ==============
+# ===== Состояния разговора =====
 NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
 
-# ============== Декораторы ==============
+# ===== Декораторы =====
 def admin_required(func):
     def wrapper(update: Update, context: CallbackContext):
         user_id = update.message.from_user.id
@@ -30,11 +30,11 @@ def admin_required(func):
         try:
             admin = session_db.query(Admin).filter_by(telegram_id=user_id, is_active=True).first()
             if not admin:
-                update.message.reply_text("❌ Доступ запрещён.")
+                update.message.reply_text("❌ У вас нет прав администратора.")
                 return
+            return func(update, context)
         finally:
             session_db.close()
-        return func(update, context)
     return wrapper
 
 
@@ -47,7 +47,8 @@ def super_admin_required(func):
         return func(update, context)
     return wrapper
 
-# ============== Админ-команды ==============
+
+# ===== Админ-команды =====
 @admin_required
 def admin_stats(update: Update, context: CallbackContext):
     session_db = get_session()
@@ -61,7 +62,7 @@ def admin_stats(update: Update, context: CallbackContext):
         stats = f"""
 📊 *Статистика:*
 
-• Всего: {total}
+• Всего заявок: {total}
 • Ожидают: {pending}
 • Подтверждены: {confirmed}
 • Отклонены: {rejected}
@@ -77,7 +78,7 @@ def admin_add(update: Update, context: CallbackContext):
         update.message.reply_text("Использование: /admin_add <telegram_id> [роль]")
         return
     try:
-        tid = int(context.args[0])
+        telegram_id = int(context.args[0])
         role = context.args[1] if len(context.args) > 1 else 'moderator'
         if role not in ['admin', 'moderator']:
             update.message.reply_text("Роль: 'admin' или 'moderator'")
@@ -85,14 +86,20 @@ def admin_add(update: Update, context: CallbackContext):
 
         session_db = get_session()
         try:
-            if session_db.query(Admin).filter_by(telegram_id=tid).first():
+            if session_db.query(Admin).filter_by(telegram_id=telegram_id).first():
                 update.message.reply_text("⚠️ Уже является админом.")
                 return
 
-            new_admin = Admin(telegram_id=tid, role=role, created_by=update.message.from_user.id)
+            new_admin = Admin(
+                telegram_id=telegram_id,
+                username=f"user_{telegram_id}",
+                full_name="Добавлен ботом",
+                role=role,
+                created_by=update.message.from_user.id
+            )
             session_db.add(new_admin)
             session_db.commit()
-            update.message.reply_text(f"✅ Админ {tid} добавлен ({role})")
+            update.message.reply_text(f"✅ Админ {telegram_id} добавлен как {role}")
         finally:
             session_db.close()
     except ValueError:
@@ -104,7 +111,7 @@ def admin_list(update: Update, context: CallbackContext):
     session_db = get_session()
     try:
         admins = session_db.query(Admin).all()
-        msg = "👥 *Администраторы:*\n\n"
+        msg = "👥 *Администраторы:*\n"
         for a in admins:
             status = "🟢" if a.is_active else "🔴"
             msg += f"{status} {a.telegram_id} ({a.role})\n"
@@ -112,7 +119,8 @@ def admin_list(update: Update, context: CallbackContext):
     finally:
         session_db.close()
 
-# ============== Регистрация ==============
+
+# ===== Регистрация =====
 def start(update: Update, context: CallbackContext) -> int:
     user = update.message.from_user
     context.user_data.update({
@@ -127,7 +135,7 @@ def get_name(update: Update, context: CallbackContext) -> int:
     context.user_data['full_name'] = update.message.text
     kb = [[w] for w in config.WEAPON_TYPES]
     rm = ReplyKeyboardMarkup(kb, one_time_keyboard=True)
-    update.message.reply_text("Оружие:", reply_markup=rm)
+    update.message.reply_text("Выберите оружие:", reply_markup=rm)
     return WEAPON
 
 
@@ -230,7 +238,8 @@ def view_registrations(update: Update, context: CallbackContext):
     finally:
         session_db.close()
 
-# ============== Диспетчер ==============
+
+# ===== Настройка диспетчера =====
 def setup_dispatcher():
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler('start', start)],
@@ -257,7 +266,7 @@ def setup_dispatcher():
 
 dp = setup_dispatcher()
 
-# ============== Веб-интерфейс ==============
+# ===== Веб-интерфейс =====
 ADMIN_TEMPLATE = """
 <h1>Заявки ({{ regs|length }})</h1>
 <table border="1"><tr><th>ФИО</th><th>Оружие</th><th>Статус</th></tr>
@@ -267,9 +276,11 @@ ADMIN_TEMPLATE = """
 </table>
 """
 
+
 @app.route('/')
 def home():
     return jsonify(status="Running")
+
 
 @app.route('/admin')
 def admin():
@@ -280,11 +291,13 @@ def admin():
     finally:
         session_db.close()
 
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     update = Update.de_json(request.get_json(), bot)
     dp.process_update(update)
     return 'ok'
+
 
 @app.route('/set_webhook')
 def set_webhook():
@@ -294,9 +307,11 @@ def set_webhook():
     except Exception as e:
         return f"❌ Ошибка: {e}"
 
+
 @app.route('/health')
 def health():
     return jsonify(status="healthy")
+
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=config.PORT)
