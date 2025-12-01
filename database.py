@@ -1,9 +1,9 @@
 import os
 import logging
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, inspect, text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -54,13 +54,14 @@ class Registration(Base):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
 
+
 # === Модель администраторов ===
 class Admin(Base):
     __tablename__ = 'admins'
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     telegram_id = Column(Integer, unique=True, nullable=False)
-    username = Column(String(100))
+    username = Column(String(100))  # Может быть None
     full_name = Column(String(200))
     role = Column(String(50), default='moderator')
     is_active = Column(Boolean, default=True)
@@ -83,26 +84,26 @@ class Admin(Base):
             'created_by': self.created_by
         }
 
+
 # Глобальные объекты
 engine = None
 SessionLocal = None
 
+
 def init_db():
-    """Инициализация базы данных"""
+    """Инициализация базы данных с автоматическим добавлением недостающих колонок"""
     global engine, SessionLocal
-    
-    # Получаем URL базы из конфигурации
+
     db_url = config.DATABASE_URL
-    
     if not db_url:
         logger.critical("❌ DATABASE_URL не установлен в конфигурации!")
         raise RuntimeError("DATABASE_URL is not set")
-    
-    # SQLAlchemy поддерживает только 'postgresql://', а не 'postgres://'
+
+    # Исправление схемы URL для SQLAlchemy
     if db_url.startswith("postgres://"):
         db_url = db_url.replace("postgres://", "postgresql://", 1)
         logger.info("🔄 Обновлён URL с 'postgres://' на 'postgresql://'")
-    
+
     try:
         # Создаём движок
         engine = create_engine(
@@ -113,26 +114,26 @@ def init_db():
             max_overflow=10,
             echo=config.DEBUG
         )
-        
-        # Создаём таблицы если их нет
+
+        # Создаём таблицы, если они не существуют
         Base.metadata.create_all(bind=engine)
-        logger.info("✅ Таблицы созданы/проверены")
-        
-        # Проверяем и добавляем отсутствующие колонки
-        migrate_database()
-        
+        logger.info("✅ Таблицы проверены/созданы")
+
         # Создаём фабрику сессий
         SessionLocal = scoped_session(sessionmaker(
             autocommit=False,
             autoflush=False,
             bind=engine
         ))
-        
+
+        # Проверяем и обновляем схему при необходимости
+        fix_admin_table_schema()
+
         # Инициализируем супер-админов
         initialize_super_admins()
-        
+
         logger.info("🟢 База данных успешно инициализирована")
-        
+
     except SQLAlchemyError as e:
         logger.critical(f"🔴 Ошибка подключения к базе данных: {e}")
         raise
@@ -140,50 +141,47 @@ def init_db():
         logger.critical(f"🔴 Неизвестная ошибка при инициализации БД: {e}")
         raise
 
-def migrate_database():
-    """Миграция базы данных - добавление отсутствующих колонок"""
+
+def fix_admin_table_schema():
+    """Добавляет недостающие колонки в таблицу admins при необходимости"""
+    session = SessionLocal()
     try:
-        inspector = inspect(engine)
-        
-        # Проверяем и добавляем отсутствующие колонки в таблицу admins
-        if 'admins' in inspector.get_table_names():
-            existing_columns = [col['name'] for col in inspector.get_columns('admins')]
-            
-            # Используем сессию для выполнения ALTER TABLE
-            session = SessionLocal()
-            try:
-                # Добавляем отсутствующие колонки
-                if 'username' not in existing_columns:
-                    session.execute(text('ALTER TABLE admins ADD COLUMN username VARCHAR(100)'))
-                    logger.info("✅ Добавлена колонка 'username' в таблицу 'admins'")
-                
-                if 'full_name' not in existing_columns:
-                    session.execute(text('ALTER TABLE admins ADD COLUMN full_name VARCHAR(200)'))
-                    logger.info("✅ Добавлена колонка 'full_name' в таблицу 'admins'")
-                
-                if 'role' not in existing_columns:
-                    session.execute(text("ALTER TABLE admins ADD COLUMN role VARCHAR(50) DEFAULT 'moderator'"))
-                    logger.info("✅ Добавлена колонка 'role' в таблицу 'admins'")
-                
-                if 'is_active' not in existing_columns:
-                    session.execute(text('ALTER TABLE admins ADD COLUMN is_active BOOLEAN DEFAULT true'))
-                    logger.info("✅ Добавлена колонка 'is_active' в таблицу 'admins'")
-                
-                if 'created_by' not in existing_columns:
-                    session.execute(text('ALTER TABLE admins ADD COLUMN created_by INTEGER'))
-                    logger.info("✅ Добавлена колонка 'created_by' в таблицу 'admins'")
-                
-                session.commit()
-            except Exception as e:
-                session.rollback()
-                logger.warning(f"⚠️  Ошибка при миграции таблицы admins: {e}")
-            finally:
-                session.close()
-        else:
-            logger.info("✅ Таблица 'admins' создана с нуля")
-            
+        # Проверяем, есть ли колонка `username`
+        result = session.execute(text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'admins' AND column_name = 'username'
+        """))
+        if not result.fetchone():
+            session.execute(text("ALTER TABLE admins ADD COLUMN username VARCHAR(100)"))
+            session.commit()
+            logger.info("✅ Добавлена колонка 'username' в таблицу 'admins'")
+
+        # Проверяем наличие `full_name`
+        result = session.execute(text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'admins' AND column_name = 'full_name'
+        """))
+        if not result.fetchone():
+            session.execute(text("ALTER TABLE admins ADD COLUMN full_name VARCHAR(200)"))
+            session.commit()
+            logger.info("✅ Добавлена колонка 'full_name' в таблицу 'admins'")
+
+        # Проверяем наличие `created_by`
+        result = session.execute(text("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'admins' AND column_name = 'created_by'
+        """))
+        if not result.fetchone():
+            session.execute(text("ALTER TABLE admins ADD COLUMN created_by INTEGER"))
+            session.commit()
+            logger.info("✅ Добавлена колонка 'created_by' в таблицу 'admins'")
+
     except Exception as e:
-        logger.error(f"⚠️  Ошибка при проверке миграций: {e}")
+        logger.error(f"⚠️ Ошибка при обновлении схемы admins: {e}")
+        session.rollback()
+    finally:
+        session.close()
+
 
 @contextmanager
 def db_session():
@@ -199,9 +197,11 @@ def db_session():
     finally:
         session.close()
 
+
 def get_session():
     """Получение новой сессии"""
     return SessionLocal()
+
 
 def initialize_super_admins():
     """Инициализирует супер-админов из конфигурации"""
@@ -209,7 +209,7 @@ def initialize_super_admins():
     if not admin_ids:
         logger.warning("⚠️ ADMIN_TELEGRAM_IDS не установлен")
         return
-    
+
     session = SessionLocal()
     try:
         for telegram_id in admin_ids:
@@ -230,14 +230,16 @@ def initialize_super_admins():
                 existing.is_active = True
                 existing.role = 'admin'
                 logger.info(f"✅ Активирован супер-админ: {telegram_id}")
-        
+
         session.commit()
-        
+
     except Exception as e:
         session.rollback()
         logger.error(f"❌ Ошибка при инициализации админов: {e}")
+        raise
     finally:
         session.close()
+
 
 def get_db_stats():
     """Получение статистики базы данных"""
@@ -248,7 +250,7 @@ def get_db_stats():
         confirmed = session.query(Registration).filter_by(status='confirmed').count()
         rejected = session.query(Registration).filter_by(status='rejected').count()
         total_admins = session.query(Admin).filter_by(is_active=True).count()
-        
+
         return {
             'total_registrations': total_reg,
             'pending': pending,
@@ -258,6 +260,7 @@ def get_db_stats():
         }
     finally:
         session.close()
+
 
 def close_db():
     """Закрытие соединения с базой данных"""
