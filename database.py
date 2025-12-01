@@ -3,7 +3,6 @@ import logging
 from sqlalchemy import create_engine, Column, BigInteger, String, Boolean, DateTime, Text, inspect, text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
-from sqlalchemy.exc import SQLAlchemyError
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -102,15 +101,15 @@ def init_db():
         db_url = db_url.replace("postgres://", "postgresql://", 1)
         logger.info("✅ Преобразовали postgres:// в postgresql://")
 
-    logger.info(f"📊 Подключаемся к БД: {db_url.split('@')[-1] if '@' in db_url else db_url}")
+    logger.info(f"📊 Подключаемся к БД")
     
     try:
         engine = create_engine(
             db_url, 
             pool_pre_ping=True, 
             echo=config.DEBUG,
-            pool_size=10,
-            max_overflow=20,
+            pool_size=5,
+            max_overflow=10,
             pool_recycle=3600
         )
         
@@ -138,6 +137,7 @@ def init_db():
     initialize_super_admins()
     
     logger.info("✅ База данных инициализирована")
+    return True
 
 
 def fix_database_schema():
@@ -164,7 +164,6 @@ def fix_database_schema():
                 if 'INTEGER' in col_type.upper() or 'INT' in col_type.upper():
                     logger.warning("   ⚠️ telegram_id имеет тип INTEGER, меняем на BIGINT")
                     try:
-                        # Для PostgreSQL
                         session.execute(text("ALTER TABLE admins ALTER COLUMN telegram_id TYPE BIGINT"))
                         session.commit()
                         logger.info("   ✅ telegram_id изменен на BIGINT")
@@ -173,8 +172,6 @@ def fix_database_schema():
                         session.rollback()
                 else:
                     logger.info("   ✅ telegram_id уже имеет правильный тип")
-            else:
-                logger.warning("   ⚠️ Колонка telegram_id не найдена, будет создана автоматически")
             
             # 2. Проверяем created_at
             if 'created_at' not in columns:
@@ -202,25 +199,25 @@ def fix_database_schema():
         if 'registrations' in inspector.get_table_names():
             logger.info("✅ Таблица 'registrations' существует")
             
-            # Проверяем наличие индексов
+            # Создаем индексы если их нет
             indexes = inspector.get_indexes('registrations')
             index_names = [idx['name'] for idx in indexes]
             
-            # Создаем индекс для telegram_id если его нет
+            # Индекс для telegram_id
             if not any('telegram_id' in idx.get('column_names', []) for idx in indexes):
                 logger.warning("   ⚠️ Индекс для telegram_id не найден, создаем...")
                 try:
-                    session.execute(text("CREATE INDEX idx_registrations_telegram_id ON registrations(telegram_id)"))
+                    session.execute(text("CREATE INDEX IF NOT EXISTS idx_registrations_telegram_id ON registrations(telegram_id)"))
                     session.commit()
                     logger.info("   ✅ Индекс для telegram_id создан")
                 except Exception as e:
                     logger.error(f"   ❌ Ошибка создания индекса: {e}")
             
-            # Создаем индекс для status если его нет
+            # Индекс для status
             if not any('status' in idx.get('column_names', []) for idx in indexes):
                 logger.warning("   ⚠️ Индекс для status не найден, создаем...")
                 try:
-                    session.execute(text("CREATE INDEX idx_registrations_status ON registrations(status)"))
+                    session.execute(text("CREATE INDEX IF NOT EXISTS idx_registrations_status ON registrations(status)"))
                     session.commit()
                     logger.info("   ✅ Индекс для status создан")
                 except Exception as e:
@@ -247,10 +244,8 @@ def initialize_super_admins():
     session = SessionLocal()
     try:
         for tid in admin_ids:
-            # Проверяем существование админа
             existing = session.query(Admin).filter_by(telegram_id=tid).first()
             if not existing:
-                # Создаем нового супер-админа
                 admin = Admin(
                     telegram_id=tid,
                     username=f'admin_{tid}',
@@ -262,14 +257,7 @@ def initialize_super_admins():
                 session.add(admin)
                 logger.info(f"   ✅ Добавлен супер-админ: {tid}")
             else:
-                # Обновляем существующего до супер-админа
-                if existing.role != 'admin' or not existing.is_active:
-                    existing.role = 'admin'
-                    existing.is_active = True
-                    session.add(existing)
-                    logger.info(f"   🔄 Обновлен супер-админ: {tid}")
-                else:
-                    logger.info(f"   ℹ️ Супер-админ {tid} уже существует")
+                logger.info(f"   ℹ️ Супер-админ {tid} уже существует")
         
         session.commit()
         logger.info(f"✅ Инициализация админов завершена")
@@ -277,9 +265,6 @@ def initialize_super_admins():
     except Exception as e:
         logger.error(f"❌ Ошибка инициализации админов: {e}")
         session.rollback()
-        # Подробная информация об ошибке
-        if hasattr(e, 'orig'):
-            logger.error(f"   Детали: {e.orig}")
     finally:
         session.close()
 
@@ -299,30 +284,3 @@ def check_database_connection():
     except Exception as e:
         logger.error(f"❌ Ошибка проверки соединения с БД: {e}")
         return False
-
-
-def get_database_stats():
-    """Получение статистики базы данных"""
-    stats = {}
-    session = SessionLocal()
-    try:
-        # Количество записей в таблицах
-        stats['registrations_count'] = session.query(Registration).count()
-        stats['admins_count'] = session.query(Admin).count()
-        
-        # Статусы заявок
-        stats['pending_count'] = session.query(Registration).filter_by(status='pending').count()
-        stats['confirmed_count'] = session.query(Registration).filter_by(status='confirmed').count()
-        stats['rejected_count'] = session.query(Registration).filter_by(status='rejected').count()
-        
-        # Последняя заявка
-        last_reg = session.query(Registration).order_by(Registration.created_at.desc()).first()
-        if last_reg:
-            stats['last_registration'] = last_reg.created_at.isoformat()
-        
-        return stats
-    except Exception as e:
-        logger.error(f"Ошибка получения статистики: {e}")
-        return {}
-    finally:
-        session.close()
