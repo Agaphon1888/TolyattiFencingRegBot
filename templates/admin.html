@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Админ-панель</title>
+    <title>Админ-панель Tolyatti Fencing</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 40px; }
         h1 { color: #333; }
@@ -15,6 +15,9 @@
         .pending { background: #ffc107; color: #000; }
         .confirmed { background: #28a745; color: white; }
         .rejected { background: #dc3545; color: white; }
+        a { color: #007bff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .error { color: #dc3545; background: #f8d7da; padding: 15px; border-radius: 5px; margin: 20px 0; }
     </style>
 </head>
 <body>
@@ -24,6 +27,7 @@
         <h3>📊 Статистика</h3>
         <p><strong>Всего заявок:</strong> <span id="total">0</span></p>
         <p><strong>Ожидают рассмотрения:</strong> <span id="pending">0</span></p>
+        <p><a href="/health">Проверка состояния</a> | <a href="/set_webhook">Установить вебхук</a></p>
     </div>
     
     <h3>Заявки</h3>
@@ -34,19 +38,17 @@
     <script>
         async function loadData() {
             try {
-                const token = new URLSearchParams(window.location.search).get('token');
-                if (!token) {
-                    document.getElementById('registrations').innerHTML = 
-                        '<p style="color: red;">Ошибка: отсутствует токен доступа</p>';
-                    return;
-                }
-                
-                const response = await fetch(`/api/registrations?token=${token}`);
+                const response = await fetch('/api/registrations');
                 const data = await response.json();
                 
                 if (data.error) {
                     document.getElementById('registrations').innerHTML = 
-                        `<p style="color: red;">Ошибка: ${data.error}</p>`;
+                        `<div class="error">
+                            <strong>Ошибка:</strong> ${data.error}
+                            <br><br>
+                            <a href="/">На главную</a> | 
+                            <a href="/health">Проверить состояние</a>
+                        </div>`;
                     return;
                 }
                 
@@ -65,7 +67,7 @@
                 
                 let html = `<table>
                     <tr>
-                        <th>ID</th><th>ФИО</th><th>Оружие</th><th>Статус</th><th>Действия</th>
+                        <th>ID</th><th>ФИО</th><th>Оружие</th><th>Статус</th><th>Дата</th>
                     </tr>`;
                 
                 data.registrations.forEach(reg => {
@@ -75,16 +77,10 @@
                     
                     html += `<tr>
                         <td>${reg.id}</td>
-                        <td>${reg.full_name}</td>
-                        <td>${reg.weapon_type}</td>
+                        <td>${reg.full_name || 'Не указано'}</td>
+                        <td>${reg.weapon_type || 'Не указано'}</td>
                         <td><span class="badge ${statusClass}">${statusText}</span></td>
-                        <td>
-                            ${reg.status === 'pending' ? 
-                                `<button onclick="confirmReg(${reg.id})">✅</button>
-                                 <button onclick="rejectReg(${reg.id})">❌</button>` : 
-                                ''}
-                            <button onclick="viewDetails(${reg.id})">👁️</button>
-                        </td>
+                        <td>${new Date(reg.created_at).toLocaleString('ru-RU')}</td>
                     </tr>`;
                 });
                 
@@ -93,38 +89,13 @@
                 
             } catch (error) {
                 document.getElementById('registrations').innerHTML = 
-                    `<p style="color: red;">Ошибка загрузки: ${error.message}</p>`;
+                    `<div class="error">
+                        <strong>Ошибка загрузки:</strong> ${error.message}
+                        <br><br>
+                        <a href="/">На главную</a> | 
+                        <a href="/health">Проверить состояние</a>
+                    </div>`;
             }
-        }
-        
-        async function confirmReg(id) {
-            const token = new URLSearchParams(window.location.search).get('token');
-            const response = await fetch(`/api/registrations/${id}/confirm?token=${token}`, {
-                method: 'POST'
-            });
-            if (response.ok) {
-                alert('Заявка подтверждена');
-                loadData();
-            } else {
-                alert('Ошибка подтверждения');
-            }
-        }
-        
-        async function rejectReg(id) {
-            const token = new URLSearchParams(window.location.search).get('token');
-            const response = await fetch(`/api/registrations/${id}/reject?token=${token}`, {
-                method: 'POST'
-            });
-            if (response.ok) {
-                alert('Заявка отклонена');
-                loadData();
-            } else {
-                alert('Ошибка отклонения');
-            }
-        }
-        
-        function viewDetails(id) {
-            alert(`Детали заявки #${id}`);
         }
         
         // Загружаем данные при открытии страницы
