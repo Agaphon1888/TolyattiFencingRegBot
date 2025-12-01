@@ -1,6 +1,6 @@
 import os
 import logging
-from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text, text
+from sqlalchemy import create_engine, Column, Integer, String, Boolean, DateTime, Text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.exc import SQLAlchemyError
@@ -30,22 +30,6 @@ class Registration(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def to_dict(self):
-        return {
-            'id': self.id,
-            'telegram_id': self.telegram_id,
-            'username': self.username,
-            'full_name': self.full_name,
-            'weapon_type': self.weapon_type,
-            'category': self.category,
-            'age_group': self.age_group,
-            'phone': self.phone,
-            'experience': self.experience,
-            'status': self.status,
-            'created_at': self.created_at.isoformat(),
-            'updated_at': self.updated_at.isoformat()
-        }
-
 
 class Admin(Base):
     __tablename__ = 'admins'
@@ -55,7 +39,7 @@ class Admin(Base):
     full_name = Column(String(200))
     role = Column(String(50), default='moderator')
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)  # 🟢 Добавляем колонку
     created_by = Column(Integer)
 
 
@@ -81,21 +65,17 @@ def init_db():
 def fix_admin_table_schema():
     session = SessionLocal()
     try:
-        for col_name, col_def in [
-            ('username', 'VARCHAR(100)'),
-            ('full_name', 'VARCHAR(200)'),
-            ('created_by', 'INTEGER')
-        ]:
-            result = session.execute(text(f"""
-                SELECT column_name FROM information_schema.columns 
-                WHERE table_name = 'admins' AND column_name = '{col_name}'
-            """))
-            if not result.fetchone():
-                session.execute(text(f"ALTER TABLE admins ADD COLUMN {col_name} {col_def}"))
-                session.commit()
-                logger.info(f"✅ Добавлена колонка '{col_name}' в 'admins'")
+        # Проверяем существование колонки created_at
+        result = session.execute("""
+            SELECT column_name FROM information_schema.columns 
+            WHERE table_name = 'admins' AND column_name = 'created_at'
+        """)
+        if not result.fetchone():
+            session.execute("ALTER TABLE admins ADD COLUMN created_at TIMESTAMP DEFAULT NOW()")
+            session.commit()
+            logger.info("✅ Добавлена колонка 'created_at' в 'admins'")
     except Exception as e:
-        logger.error(f"Ошибка схемы: {e}")
+        logger.error(f"Ошибка при добавлении колонки created_at: {e}")
         session.rollback()
     finally:
         session.close()
@@ -106,8 +86,15 @@ def initialize_super_admins():
     session = SessionLocal()
     try:
         for tid in admin_ids:
-            if not session.query(Admin).filter_by(telegram_id=tid).first():
-                admin = Admin(telegram_id=tid, username='admin', full_name='Админ', role='admin', created_by=0)
+            existing = session.query(Admin).filter_by(telegram_id=tid).first()
+            if not existing:
+                admin = Admin(
+                    telegram_id=tid,
+                    username='admin',
+                    full_name='Super Admin',
+                    role='admin',
+                    created_by=0
+                )
                 session.add(admin)
                 logger.info(f"✅ Добавлен супер-админ: {tid}")
         session.commit()
