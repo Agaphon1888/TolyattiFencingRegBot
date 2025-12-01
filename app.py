@@ -2,11 +2,10 @@ import os
 import logging
 from datetime import datetime, timedelta
 import secrets
-from urllib.parse import urlparse
 
-from flask import Flask, request, jsonify, render_template, redirect, url_for, abort
+from flask import Flask, request, jsonify, render_template, redirect, url_for
 from telegram import Update, Bot
-from telegram.ext import Dispatcher, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram.ext import Dispatcher, CommandHandler, MessageHandler, filters
 import werkzeug.exceptions as http_exceptions
 
 from config import config
@@ -23,18 +22,16 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
-# Инициализация базы данных
+# Глобальные переменные
+bot = None
+dispatcher = None
+
+# Инициализация базы данных при старте
 try:
     init_db()
     logger.info("✅ База данных инициализирована")
 except Exception as e:
     logger.error(f"❌ Ошибка инициализации БД: {e}")
-    # Продолжаем работу даже если БД не инициализирована
-    # для возможности показать страницу ошибки
-
-# Глобальные переменные
-bot = None
-dispatcher = None
 
 def initialize_bot():
     """Инициализация бота Telegram"""
@@ -53,7 +50,7 @@ def initialize_bot():
         dispatcher.add_handler(CommandHandler("help", help_command))
         dispatcher.add_handler(CommandHandler("admin", admin_command))
         dispatcher.add_handler(CommandHandler("status", status_command))
-        dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_message))
+        dispatcher.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
         
         # Установка вебхука
         webhook_url = config.get_webhook_url()
@@ -64,7 +61,7 @@ def initialize_bot():
         logger.error(f"❌ Ошибка инициализации бота: {e}")
 
 # Команда /start
-def start_command(update: Update, context: CallbackContext):
+def start_command(update: Update, context):
     """Обработчик команды /start"""
     user = update.effective_user
     update.message.reply_text(
@@ -78,7 +75,7 @@ def start_command(update: Update, context: CallbackContext):
     )
 
 # Команда /help
-def help_command(update: Update, context: CallbackContext):
+def help_command(update: Update, context):
     """Обработчик команды /help"""
     update.message.reply_text(
         "📋 Доступные команды:\n\n"
@@ -96,7 +93,7 @@ def help_command(update: Update, context: CallbackContext):
     )
 
 # Команда /admin
-def admin_command(update: Update, context: CallbackContext):
+def admin_command(update: Update, context):
     """Обработчик команды /admin"""
     user_id = update.effective_user.id
     
@@ -112,11 +109,8 @@ def admin_command(update: Update, context: CallbackContext):
             # Генерация токена доступа
             token = secrets.token_urlsafe(32)
             
-            # В реальной реализации здесь нужно сохранить токен в базе
-            # с временем истечения и привязать к пользователю
-            
             base_url = config.get_base_url()
-            admin_url = f"{base_url}/admin?token={token}"
+            admin_url = f"{base_url}/admin_panel?token={token}"
             
             update.message.reply_text(
                 f"🔑 Доступ разрешен, {update.effective_user.first_name}!\n\n"
@@ -133,7 +127,7 @@ def admin_command(update: Update, context: CallbackContext):
         session.close()
 
 # Команда /status
-def status_command(update: Update, context: CallbackContext):
+def status_command(update: Update, context):
     """Обработчик команды /status"""
     user_id = update.effective_user.id
     
@@ -181,9 +175,8 @@ def status_command(update: Update, context: CallbackContext):
         session.close()
 
 # Обработчик текстовых сообщений
-def handle_message(update: Update, context: CallbackContext):
+def handle_message(update: Update, context):
     """Обработчик текстовых сообщений"""
-    # В будущем здесь будет логика регистрации
     update.message.reply_text(
         "Для регистрации используйте команду /register\n"
         "Для проверки статуса - /status\n"
@@ -218,7 +211,6 @@ def format_phone(phone):
     """Форматирование телефона"""
     if not phone:
         return ''
-    # Простое форматирование: +7 (999) 123-45-67
     phone = str(phone).replace(' ', '').replace('-', '').replace('(', '').replace(')', '')
     if phone.startswith('+7') and len(phone) == 12:
         return f"+7 ({phone[2:5]}) {phone[5:8]}-{phone[8:10]}-{phone[10:12]}"
@@ -243,16 +235,7 @@ def internal_error(e):
 @app.route('/')
 def index():
     """Главная страница"""
-    try:
-        stats = get_db_stats()
-    except:
-        stats = {'total_registrations': 0, 'pending': 0, 'confirmed': 0, 'rejected': 0}
-    
-    return render_template('admin.html', 
-                         registrations=[],
-                         config=config,
-                         now=datetime.utcnow(),
-                         current_admin_id=None)
+    return redirect('/health')
 
 # Страница администратора
 @app.route('/admin')
@@ -275,13 +258,12 @@ def admin_panel():
     try:
         session = get_session()
         registrations = session.query(Registration).order_by(Registration.created_at.desc()).all()
-        stats = get_db_stats()
         
         return render_template('admin.html',
                              registrations=registrations,
                              config=config,
                              now=datetime.utcnow(),
-                             current_admin_id=123456,  # Заглушка
+                             current_admin_id=123456,
                              token=token)
     except Exception as e:
         logger.error(f"Ошибка загрузки панели админа: {e}")
@@ -289,8 +271,7 @@ def admin_panel():
                              code=500, 
                              error=f"Ошибка загрузки данных: {str(e)}")
     finally:
-        if 'session' in locals():
-            session.close()
+        session.close()
 
 # API для администратора
 @app.route('/api/registrations/<int:reg_id>/confirm')
@@ -310,18 +291,10 @@ def confirm_registration(reg_id):
         registration.updated_at = datetime.utcnow()
         session.commit()
         
-        # Уведомление пользователя в Telegram
-        try:
-            if bot:
-                bot.send_message(
-                    chat_id=registration.telegram_id,
-                    text=f"✅ Ваша заявка #{registration.id} подтверждена!\n\n"
-                         f"Ожидайте дальнейших инструкций от организаторов."
-                )
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление: {e}")
-        
         return jsonify({'success': True, 'registration': registration.to_dict()})
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': str(e)}), 500
     finally:
         session.close()
 
@@ -342,18 +315,10 @@ def reject_registration(reg_id):
         registration.updated_at = datetime.utcnow()
         session.commit()
         
-        # Уведомление пользователя в Telegram
-        try:
-            if bot:
-                bot.send_message(
-                    chat_id=registration.telegram_id,
-                    text=f"❌ Ваша заявка #{registration.id} отклонена.\n\n"
-                         f"По вопросам обращайтесь к организаторам."
-                )
-        except Exception as e:
-            logger.error(f"Не удалось отправить уведомление: {e}")
-        
         return jsonify({'success': True, 'registration': registration.to_dict()})
+    except Exception as e:
+        session.rollback()
+        return jsonify({'error': str(e)}), 500
     finally:
         session.close()
 
@@ -378,8 +343,9 @@ def health_check():
     """Проверка здоровья приложения"""
     try:
         session = get_session()
-        session.execute('SELECT 1')
-        db_status = 'healthy'
+        # Простой запрос для проверки соединения
+        result = session.execute("SELECT 1").scalar()
+        db_status = 'healthy' if result == 1 else 'unhealthy'
         session.close()
     except Exception as e:
         db_status = f'unhealthy: {str(e)}'
@@ -391,7 +357,7 @@ def health_check():
         'telegram_bot': 'initialized' if bot else 'not_initialized',
         'config': {
             'webhook_url': config.WEBHOOK_URL,
-            'admin_ids': config.get_admin_ids(),
+            'admin_ids_count': len(config.get_admin_ids()),
             'debug': config.DEBUG
         }
     })
@@ -463,6 +429,9 @@ def test_data():
         
         session.commit()
         return "Тестовые данные созданы успешно"
+    except Exception as e:
+        session.rollback()
+        return f"Ошибка создания тестовых данных: {str(e)}", 500
     finally:
         session.close()
 
@@ -474,12 +443,8 @@ def show_config():
     return jsonify(config_dict)
 
 # Инициализация при запуске
+initialize_bot()
+
 if __name__ == '__main__':
-    # Инициализация бота
-    initialize_bot()
-    
     # Запуск Flask
     app.run(host='0.0.0.0', port=config.PORT, debug=config.DEBUG)
-else:
-    # При запуске через Gunicorn
-    initialize_bot()
