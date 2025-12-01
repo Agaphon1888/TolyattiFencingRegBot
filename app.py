@@ -446,7 +446,6 @@ def setup_dispatcher():
         allow_reentry=True
     )
 
-    # Изменяем workers с 0 на 1
     dp = Dispatcher(bot, None, workers=1, use_context=True)
     dp.add_handler(conv_handler)
     dp.add_handler(CommandHandler('help', help_command))
