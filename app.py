@@ -500,7 +500,96 @@ def admin_page():
         return render_template('error.html', 
                              code=500, 
                              error=f"Внутренняя ошибка сервера: {str(e)}"), 500
-
+@app.route('/admin')
+def admin_page():
+    """Простая админ-страница с возможностью ввода токена"""
+    simple_mode = request.args.get('simple')
+    token = request.args.get('token')
+    
+    try:
+        with session_scope() as session:
+            regs = session.query(Registration).order_by(Registration.created_at.desc()).limit(50).all()
+            total = session.query(Registration).count()
+            pending = session.query(Registration).filter_by(status='pending').count()
+            
+            # Если запрошена простая версия, показываем только данные без API
+            if simple_mode:
+                return render_template_string("""
+                <!DOCTYPE html>
+                <html>
+                <head>
+                    <meta charset="UTF-8">
+                    <title>Админ-панель (простая версия)</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; margin: 40px; }
+                        h1 { color: #333; }
+                        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                        th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+                        th { background-color: #4CAF50; color: white; }
+                        tr:nth-child(even) { background-color: #f2f2f2; }
+                        .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
+                        .pending { background: #ffc107; color: #000; }
+                        .confirmed { background: #28a745; color: white; }
+                        .rejected { background: #dc3545; color: white; }
+                        a { color: #007bff; text-decoration: none; }
+                        a:hover { text-decoration: underline; }
+                    </style>
+                </head>
+                <body>
+                    <h1>🤺 Админ-панель Tolyatti Fencing (простая версия)</h1>
+                    
+                    <div style="background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 20px 0;">
+                        <h3>📊 Статистика</h3>
+                        <p><strong>Всего заявок:</strong> {{ total }}</p>
+                        <p><strong>Ожидают рассмотрения:</strong> {{ pending }}</p>
+                        <p><a href="/admin">Вернуться к полной версии</a> | <a href="/">На главную</a></p>
+                    </div>
+                    
+                    <h3>Последние 50 заявок</h3>
+                    {% if regs %}
+                    <table>
+                        <tr>
+                            <th>ID</th><th>ФИО</th><th>Оружие</th><th>Телефон</th><th>Статус</th><th>Дата</th>
+                        </tr>
+                        {% for r in regs %}
+                        <tr>
+                            <td>{{ r.id }}</td>
+                            <td>{{ r.full_name }}</td>
+                            <td>{{ r.weapon_type }}</td>
+                            <td>{{ r.phone }}</td>
+                            <td>
+                                <span class="badge {{ r.status }}">
+                                    {% if r.status == 'pending' %}⏳ Ожидает
+                                    {% elif r.status == 'confirmed' %}✅ Подтверждена
+                                    {% else %}❌ Отклонена{% endif %}
+                                </span>
+                            </td>
+                            <td>{{ r.created_at.strftime('%d.%m.%Y %H:%M') if r.created_at else 'Не указана' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                    {% else %}
+                    <p>Нет заявок</p>
+                    {% endif %}
+                </body>
+                </html>
+                """, regs=regs, total=total, pending=pending)
+            
+            # Полная версия с возможностью ввода токена
+            return render_template(
+                'admin.html',
+                regs=regs,
+                total=total,
+                pending=pending,
+                config=config,
+                token=token  # передаем токен из URL если есть
+            )
+    except Exception as e:
+        logger.error(f"Ошибка в админке: {e}")
+        return render_template('error.html', 
+                             code=500, 
+                             error=f"Внутренняя ошибка сервера: {str(e)}"), 500
+        
 @app.route('/admin_panel')
 def admin_panel():
     """Полная админ-панель с токеном"""
