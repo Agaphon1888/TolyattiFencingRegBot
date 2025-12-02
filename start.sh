@@ -9,21 +9,15 @@ export PORT=${PORT:-10000}
 # Создаем папку templates если её нет
 mkdir -p templates
 
-# Перемещаем HTML файлы в templates, если они есть в корне
-if [ -f "admin.html" ]; then
-    mv admin.html templates/
-fi
-if [ -f "error.html" ]; then
-    mv error.html templates/
-fi
-
 # Запуск миграций базы данных
 echo "🔄 Выполнение миграций базы данных..."
 python migrations.py init
 
 # Исправление схемы базы данных
 echo "🔧 Исправление схемы базы данных..."
-if [ -f "fix_columns.py" ]; then
+if [ -f "templates/fix_columns.py" ]; then
+    python templates/fix_columns.py
+elif [ -f "fix_columns.py" ]; then
     python fix_columns.py
 else
     echo "⚠️ Файл fix_columns.py не найден, пропускаем исправление схемы"
