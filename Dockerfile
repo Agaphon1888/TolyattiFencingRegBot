@@ -23,6 +23,9 @@ COPY . .
 # Создание необходимых директорий
 RUN mkdir -p templates
 
+# Проверка и исправление базы данных перед запуском
+RUN python fix_created_at.py || echo "Предварительная проверка базы данных"
+
 # Сделаем start.sh исполняемым
 RUN chmod +x start.sh
 
