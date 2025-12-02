@@ -281,6 +281,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
             status='pending'
         )
         session.add(reg)
+        session.commit()  # Явный коммит для получения ID
     
     # Уведомляем администраторов
     admin_ids = config.get_admin_ids()
@@ -312,7 +313,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
     
     context.user_data.clear()
     return ConversationHandler.END
-    
+
 def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text(
         "Регистрация отменена.\n"
@@ -345,7 +346,7 @@ def view_registrations(update: Update, context: CallbackContext):
             msg += f"Оружие: {r.weapon_type}\n"
             msg += f"Категория: {r.category}\n"
             msg += f"Статус: {status_ru}\n"
-            msg += f"Дата: {r.created_at.strftime('%d.%m.%Y %H:%M')}\n"
+            msg += f"Дата: {r.created_at.strftime('%d.%m.%Y %H:%M') if r.created_at else 'Не указана'}\n"
             msg += "─" * 20 + "\n\n"
         
         update.message.reply_text(msg, parse_mode='Markdown')
@@ -471,35 +472,13 @@ def home():
         "timestamp": datetime.utcnow().isoformat(),
         "endpoints": {
             "admin": "/admin",
-            "admin_panel": "/admin_panel?token=ваш_секретный_ключ",
+            "admin_panel": "/admin_panel?token=b1e807aeb2b1425995b17e1694296448",
             "health": "/health",
             "webhook": "/webhook (POST)",
-            "api": "/api/registrations?token=ваш_секретный_ключ"
+            "api": "/api/registrations?token=b1e807aeb2b1425995b17e1694296448"
         }
     })
 
-@app.route('/admin')
-def admin_page():
-    """Простая админ-страница без токена"""
-    try:
-        with session_scope() as session:
-            regs = session.query(Registration).order_by(Registration.created_at.desc()).limit(50).all()
-            total = session.query(Registration).count()
-            pending = session.query(Registration).filter_by(status='pending').count()
-            
-            # Используем реальный шаблон
-            return render_template(
-                'admin.html',
-                registrations=regs,
-                total=total,
-                pending=pending,
-                config=config
-            )
-    except Exception as e:
-        logger.error(f"Ошибка в админке: {e}")
-        return render_template('error.html', 
-                             code=500, 
-                             error=f"Внутренняя ошибка сервера: {str(e)}"), 500
 @app.route('/admin')
 def admin_page():
     """Простая админ-страница с возможностью ввода токена"""
@@ -508,12 +487,12 @@ def admin_page():
     
     try:
         with session_scope() as session:
-            regs = session.query(Registration).order_by(Registration.created_at.desc()).limit(50).all()
             total = session.query(Registration).count()
             pending = session.query(Registration).filter_by(status='pending').count()
             
             # Если запрошена простая версия, показываем только данные без API
             if simple_mode:
+                regs = session.query(Registration).order_by(Registration.created_at.desc()).limit(50).all()
                 return render_template_string("""
                 <!DOCTYPE html>
                 <html>
@@ -578,10 +557,8 @@ def admin_page():
             # Полная версия с возможностью ввода токена
             return render_template(
                 'admin.html',
-                regs=regs,
                 total=total,
                 pending=pending,
-                config=config,
                 token=token  # передаем токен из URL если есть
             )
     except Exception as e:
@@ -589,7 +566,7 @@ def admin_page():
         return render_template('error.html', 
                              code=500, 
                              error=f"Внутренняя ошибка сервера: {str(e)}"), 500
-        
+
 @app.route('/admin_panel')
 def admin_panel():
     """Полная админ-панель с токеном"""
@@ -832,6 +809,26 @@ def forbidden_error(error):
     return render_template('error.html', 
                          code=403, 
                          error="Доступ запрещен. У вас нет прав для просмотра этой страницы."), 403
+
+# ===== Функция для установки webhook при старте =====
+def setup_webhook_on_start():
+    """Установка вебхука при запуске приложения"""
+    def delayed_webhook_setup():
+        time.sleep(10)  # Ждем 10 секунд чтобы сервер запустился
+        try:
+            bot = get_bot()
+            if bot:
+                webhook_url = config.get_webhook_url()
+                bot.set_webhook(webhook_url)
+                logger.info(f"✅ Webhook установлен: {webhook_url}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка установки webhook при старте: {e}")
+    
+    thread = threading.Thread(target=delayed_webhook_setup, daemon=True)
+    thread.start()
+
+# Устанавливаем webhook при импорте модуля
+setup_webhook_on_start()
 
 # ===== Запуск приложения =====
 if __name__ == '__main__':
