@@ -6,6 +6,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
+    postgresql-client \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
@@ -22,7 +23,10 @@ COPY . .
 # Создание необходимых директорий
 RUN mkdir -p templates
 
+# Сделаем start.sh исполняемым
+RUN chmod +x start.sh
+
 EXPOSE 10000
 
 # Команда запуска
-CMD ["gunicorn", "--bind", "0.0.0.0:10000", "--workers", "1", "--timeout", "120", "app:app"]
+CMD ["./start.sh"]
