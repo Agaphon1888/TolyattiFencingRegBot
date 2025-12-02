@@ -567,55 +567,6 @@ def admin_page():
                              code=500, 
                              error=f"Внутренняя ошибка сервера: {str(e)}"), 500
 
-@app.route('/admin_panel')
-def admin_panel():
-    """Полная админ-панель с токеном"""
-    token = request.args.get('token')
-    
-    if not token or token != config.SECRET_KEY:
-        return render_template('error.html', 
-                             code=403, 
-                             error="Неверный токен доступа. Используйте: /admin_panel?token=ваш_секретный_ключ"), 403
-    
-    try:
-        with session_scope() as session:
-            regs = session.query(Registration).order_by(Registration.created_at.desc()).all()
-            
-            regs_data = []
-            for r in regs:
-                regs_data.append({
-                    'id': r.id,
-                    'telegram_id': r.telegram_id,
-                    'username': r.username,
-                    'full_name': r.full_name,
-                    'weapon_type': r.weapon_type,
-                    'category': r.category,
-                    'age_group': r.age_group,
-                    'phone': r.phone,
-                    'experience': r.experience,
-                    'status': r.status,
-                    'created_at': r.created_at.isoformat() if r.created_at else None,
-                    'updated_at': r.updated_at.isoformat() if r.updated_at else None
-                })
-            
-            admin_ids = config.get_admin_ids()
-            current_admin_id = admin_ids[0] if admin_ids else 0
-            
-            return render_template(
-                'admin.html',
-                registrations=regs,
-                registrations_json=regs_data,
-                config=config,
-                token=token,
-                current_admin_id=current_admin_id,
-                now=datetime.utcnow()
-            )
-    except Exception as e:
-        logger.error(f"Ошибка в админ-панели: {e}")
-        return render_template('error.html', 
-                             code=500, 
-                             error=f"Внутренняя ошибка сервера: {str(e)}"), 500
-
 @app.route('/api/registrations')
 def get_registrations_api():
     """API для получения заявок"""
