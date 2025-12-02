@@ -18,6 +18,27 @@
         a { color: #007bff; text-decoration: none; }
         a:hover { text-decoration: underline; }
         .error { color: #dc3545; background: #f8d7da; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .warning { color: #856404; background: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .success { color: #155724; background: #d4edda; padding: 15px; border-radius: 5px; margin: 20px 0; }
+        .action-btn { 
+            padding: 6px 12px; 
+            margin: 2px; 
+            border: none; 
+            border-radius: 4px; 
+            cursor: pointer; 
+            font-size: 12px; 
+        }
+        .btn-confirm { background: #28a745; color: white; }
+        .btn-reject { background: #dc3545; color: white; }
+        .btn-view { background: #007bff; color: white; }
+        .token-input { 
+            width: 300px; 
+            padding: 8px; 
+            border: 1px solid #ddd; 
+            border-radius: 4px; 
+            margin-right: 10px; 
+        }
+        .token-form { margin: 20px 0; }
     </style>
 </head>
 <body>
@@ -27,18 +48,50 @@
         <h3>📊 Статистика</h3>
         <p><strong>Всего заявок:</strong> <span id="total">0</span></p>
         <p><strong>Ожидают рассмотрения:</strong> <span id="pending">0</span></p>
-        <p><a href="/health">Проверка состояния</a> | <a href="/set_webhook">Установить вебхук</a></p>
+        <p>
+            <a href="/">На главную</a> | 
+            <a href="/health">Проверка состояния</a> | 
+            <a href="/set_webhook">Установить вебхук</a> |
+            <a href="/admin?simple=1">Простая версия</a>
+        </p>
+    </div>
+    
+    <div class="token-form">
+        <h3>🔐 Авторизация</h3>
+        <p>Для управления заявками требуется токен доступа.</p>
+        <input type="text" id="token-input" class="token-input" 
+               placeholder="Введите секретный токен" 
+               value="{{ token if token else '' }}">
+        <button onclick="useToken()" class="action-btn btn-view">Использовать токен</button>
+        <p><small>Токен можно получить из переменной окружения SECRET_KEY на Render</small></p>
     </div>
     
     <h3>Заявки</h3>
     <div id="registrations">
-        <p>Загрузка...</p>
+        <p>Введите токен выше для загрузки заявок</p>
     </div>
     
     <script>
+        let currentToken = "{{ token if token else '' }}";
+        
+        // Автоматически загружаем данные если токен уже есть
+        if (currentToken) {
+            loadData();
+        }
+        
+        function useToken() {
+            const tokenInput = document.getElementById('token-input');
+            currentToken = tokenInput.value.trim();
+            if (currentToken) {
+                loadData();
+            } else {
+                alert('Введите токен для доступа к API');
+            }
+        }
+        
         async function loadData() {
             try {
-                const response = await fetch('/api/registrations');
+                const response = await fetch('/api/registrations?token=' + encodeURIComponent(currentToken));
                 const data = await response.json();
                 
                 if (data.error) {
@@ -46,8 +99,9 @@
                         `<div class="error">
                             <strong>Ошибка:</strong> ${data.error}
                             <br><br>
-                            <a href="/">На главную</a> | 
-                            <a href="/health">Проверить состояние</a>
+                            <button onclick="showSimpleView()" class="action-btn btn-view">
+                                Показать простую версию без API
+                            </button>
                         </div>`;
                     return;
                 }
@@ -61,13 +115,19 @@
                 // Таблица
                 if (data.registrations.length === 0) {
                     document.getElementById('registrations').innerHTML = 
-                        '<p>Нет заявок</p>';
+                        '<div class="warning">Нет заявок для отображения</div>';
                     return;
                 }
                 
                 let html = `<table>
                     <tr>
-                        <th>ID</th><th>ФИО</th><th>Оружие</th><th>Статус</th><th>Дата</th>
+                        <th>ID</th>
+                        <th>ФИО</th>
+                        <th>Оружие</th>
+                        <th>Телефон</th>
+                        <th>Статус</th>
+                        <th>Дата</th>
+                        <th>Действия</th>
                     </tr>`;
                 
                 data.registrations.forEach(reg => {
@@ -75,16 +135,34 @@
                     const statusText = reg.status === 'pending' ? '⏳ Ожидает' : 
                                      reg.status === 'confirmed' ? '✅ Подтверждена' : '❌ Отклонена';
                     
+                    const date = reg.created_at ? new Date(reg.created_at).toLocaleString('ru-RU') : 'Не указана';
+                    
                     html += `<tr>
                         <td>${reg.id}</td>
                         <td>${reg.full_name || 'Не указано'}</td>
                         <td>${reg.weapon_type || 'Не указано'}</td>
+                        <td>${reg.phone || 'Не указано'}</td>
                         <td><span class="badge ${statusClass}">${statusText}</span></td>
-                        <td>${new Date(reg.created_at).toLocaleString('ru-RU')}</td>
+                        <td>${date}</td>
+                        <td>
+                            ${reg.status === 'pending' ? 
+                                `<button onclick="updateStatus(${reg.id}, 'confirm')" class="action-btn btn-confirm">✅ Подтвердить</button>
+                                 <button onclick="updateStatus(${reg.id}, 'reject')" class="action-btn btn-reject">❌ Отклонить</button>` : 
+                                '<span>—</span>'
+                            }
+                        </td>
                     </tr>`;
                 });
                 
                 html += '</table>';
+                
+                // Добавляем информацию о токене
+                html += `<div class="success" style="margin-top: 20px;">
+                    <strong>✅ Успешно загружено!</strong> 
+                    Используйте этот URL для прямого доступа: 
+                    <a href="/admin?token=${currentToken}">/admin?token=${currentToken}</a>
+                </div>`;
+                
                 document.getElementById('registrations').innerHTML = html;
                 
             } catch (error) {
@@ -92,14 +170,52 @@
                     `<div class="error">
                         <strong>Ошибка загрузки:</strong> ${error.message}
                         <br><br>
-                        <a href="/">На главную</a> | 
-                        <a href="/health">Проверить состояние</a>
+                        <button onclick="showSimpleView()" class="action-btn btn-view">
+                            Показать простую версию без API
+                        </button>
                     </div>`;
             }
         }
         
-        // Загружаем данные при открытии страницы
-        loadData();
+        async function updateStatus(registrationId, action) {
+            if (!confirm(`Вы уверены, что хотите ${action === 'confirm' ? 'подтвердить' : 'отклонить'} заявку #${registrationId}?`)) {
+                return;
+            }
+            
+            try {
+                const endpoint = action === 'confirm' ? 'confirm' : 'reject';
+                const response = await fetch(`/api/registrations/${registrationId}/${endpoint}?token=${encodeURIComponent(currentToken)}`);
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`✅ Статус заявки #${registrationId} успешно обновлен!`);
+                    loadData(); // Перезагружаем данные
+                } else {
+                    alert(`❌ Ошибка: ${data.error || 'Неизвестная ошибка'}`);
+                }
+            } catch (error) {
+                alert(`❌ Ошибка: ${error.message}`);
+            }
+        }
+        
+        function showSimpleView() {
+            window.location.href = '/admin?simple=1';
+        }
+        
+        // Если в URL есть токен, используем его
+        const urlParams = new URLSearchParams(window.location.search);
+        const tokenFromUrl = urlParams.get('token');
+        const simpleMode = urlParams.get('simple');
+        
+        if (tokenFromUrl) {
+            document.getElementById('token-input').value = tokenFromUrl;
+            currentToken = tokenFromUrl;
+            loadData();
+        }
+        
+        if (simpleMode === '1') {
+            showSimpleView();
+        }
     </script>
 </body>
 </html>
