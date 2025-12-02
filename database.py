@@ -27,6 +27,7 @@ class Registration(Base):
     phone = Column(String(20), nullable=False)
     experience = Column(Text, nullable=False)
     status = Column(String(20), default='pending', index=True)
+    admin_comment = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     
@@ -42,6 +43,7 @@ class Registration(Base):
             'phone': self.phone,
             'experience': self.experience,
             'status': self.status,
+            'admin_comment': self.admin_comment,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
