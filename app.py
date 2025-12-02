@@ -17,11 +17,8 @@ app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
 # Автоматически определяем папку с шаблонами
-if os.path.exists('templates'):
-    app.template_folder = 'templates'
-    print(f"✅ Шаблоны из папки: templates")
-else:
-    print(f"⚠️ Папка templates не найдена, использую корневую директорию")
+app.template_folder = 'templates'  # Явно указываем папку templates
+print(f"✅ Шаблоны из папки: {app.template_folder}")
 
 # Инициализация БД
 try:
@@ -118,7 +115,7 @@ def start(update: Update, context: CallbackContext) -> int:
     context.user_data.clear()
     context.user_data.update({
         'telegram_id': user.id,
-        'username': user.username
+        'username': user.username or f"user_{user.id}"
     })
     
     welcome_text = """
@@ -179,40 +176,42 @@ def get_age(update: Update, context: CallbackContext) -> int:
         return AGE
     context.user_data['age_group'] = a
     
-    kb = [[KeyboardButton("📞 Отправить мой номер", request_contact=True)], ["Ввести номер вручную"]]
+    kb = [[KeyboardButton("📞 Отправить мой номер", request_contact=True)]]
     rm = ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True)
     update.message.reply_text(
         "Телефон для связи:\n\n"
-        "Можно отправить ваш номер нажатием кнопки ниже или ввести вручную в формате:\n"
+        "Нажмите кнопку ниже, чтобы отправить ваш номер, или введите номер вручную в формате:\n"
         "+79991234567 или 89991234567",
         reply_markup=rm
     )
     return PHONE
 
 def get_phone(update: Update, context: CallbackContext) -> int:
+    phone = None
+    
     if update.message.contact:
         phone = update.message.contact.phone_number
-    else:
+    elif update.message.text:
         phone = update.message.text.strip()
-        
-        if phone == "Ввести номер вручную":
-            update.message.reply_text(
-                "Введите номер телефона в формате:\n"
-                "+79991234567 или 89991234567"
-            )
-            return PHONE
-    
-    # Нормализуем номер
-    phone = ''.join(filter(str.isdigit, phone))
-    if len(phone) == 11 and phone.startswith('8'):
-        phone = '7' + phone[1:]
-    if len(phone) == 10:
-        phone = '7' + phone
-    if not phone.startswith('7') or len(phone) != 11:
-        update.message.reply_text("❌ Неверный формат номера. Пожалуйста, введите номер в формате +79991234567")
+    else:
+        update.message.reply_text("❌ Пожалуйста, отправьте контакт или введите номер вручную.")
         return PHONE
     
-    context.user_data['phone'] = f'+{phone}'
+    # Нормализуем номер
+    if phone:
+        phone_digits = ''.join(filter(str.isdigit, phone))
+        
+        if phone_digits.startswith('8') and len(phone_digits) == 11:
+            phone_digits = '7' + phone_digits[1:]
+        elif len(phone_digits) == 10:
+            phone_digits = '7' + phone_digits
+        
+        if not phone_digits.startswith('7') or len(phone_digits) != 11:
+            update.message.reply_text("❌ Неверный формат номера. Пожалуйста, введите номер в формате +79991234567")
+            return PHONE
+        
+        context.user_data['phone'] = f'+{phone_digits}'
+    
     update.message.reply_text(
         "Опишите ваш опыт:\n\n"
         "• Разряд/звание (если есть)\n"
@@ -251,8 +250,8 @@ def get_experience(update: Update, context: CallbackContext) -> int:
 
 def confirm_registration(update: Update, context: CallbackContext) -> int:
     if update.message.text == '❌ Нет, исправить':
-        update.message.reply_text("Начнем заново.", reply_markup=None)
-        return start(update, context)
+        update.message.reply_text("Начнем заново. Введите ваше ФИО:", reply_markup=None)
+        return NAME
 
     data = context.user_data
     with session_scope() as session:
@@ -271,7 +270,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
             
         reg = Registration(
             telegram_id=data['telegram_id'],
-            username=data['username'],
+            username=data.get('username'),
             full_name=data['full_name'],
             weapon_type=data['weapon_type'],
             category=data['category'],
@@ -281,6 +280,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
             status='pending'
         )
         session.add(reg)
+        session.commit()  # Явный коммит для получения ID
     
     # Уведомляем администраторов
     admin_ids = config.get_admin_ids()
@@ -341,6 +341,7 @@ def view_registrations(update: Update, context: CallbackContext):
             }.get(r.status, '❓ Неизвестно')
             
             msg += f"*Заявка #{r.id}*\n"
+            msg += f"ФИО: {r.full_name}\n"
             msg += f"Оружие: {r.weapon_type}\n"
             msg += f"Категория: {r.category}\n"
             msg += f"Статус: {status_ru}\n"
@@ -356,6 +357,7 @@ def help_command(update: Update, context: CallbackContext):
 /start - Начать регистрацию на соревнования
 /myregistrations - Просмотреть мои заявки
 /cancel - Отменить текущую регистрацию
+/help - Показать справку
 
 *Для администраторов:*
 /admin_stats - Статистика заявок
@@ -442,7 +444,7 @@ def setup_dispatcher():
             EXPERIENCE: [MessageHandler(Filters.text & ~Filters.command, get_experience)],
             CONFIRM: [MessageHandler(Filters.text & ~Filters.command, confirm_registration)],
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[CommandHandler('cancel', cancel), CommandHandler('start', start)],
         allow_reentry=True
     )
 
@@ -466,83 +468,42 @@ def home():
         "status": "running",
         "service": "Tolyatti Fencing Registration Bot",
         "version": "1.0.0",
-        "timestamp": datetime.utcnow().isoformat()
+        "timestamp": datetime.utcnow().isoformat(),
+        "endpoints": {
+            "admin": "/admin",
+            "admin_panel": "/admin_panel?token=ваш_секретный_ключ",
+            "health": "/health",
+            "webhook": "/webhook (POST)",
+            "api": "/api/registrations?token=ваш_секретный_ключ"
+        }
     })
 
 @app.route('/admin')
 def admin_page():
-    """Простая админ-страница"""
-    with session_scope() as session:
-        regs = session.query(Registration).order_by(Registration.created_at.desc()).limit(20).all()
-        total = session.query(Registration).count()
-        pending = session.query(Registration).filter_by(status='pending').count()
-        
-        return render_template_string("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>Админ-панель</title>
-            <style>
-                body { font-family: Arial, sans-serif; margin: 40px; }
-                h1 { color: #333; }
-                .stats { background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 20px 0; }
-                table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
-                th { background-color: #4CAF50; color: white; }
-                tr:nth-child(even) { background-color: #f2f2f2; }
-                .badge { padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-                .pending { background: #ffc107; color: #000; }
-                .confirmed { background: #28a745; color: white; }
-                .rejected { background: #dc3545; color: white; }
-                a { color: #007bff; text-decoration: none; }
-                a:hover { text-decoration: underline; }
-            </style>
-        </head>
-        <body>
-            <h1>🤺 Админ-панель Tolyatti Fencing</h1>
+    """Простая админ-страница без токена"""
+    try:
+        with session_scope() as session:
+            regs = session.query(Registration).order_by(Registration.created_at.desc()).limit(50).all()
+            total = session.query(Registration).count()
+            pending = session.query(Registration).filter_by(status='pending').count()
             
-            <div class="stats">
-                <h3>📊 Статистика</h3>
-                <p><strong>Всего заявок:</strong> {{ total }}</p>
-                <p><strong>Ожидают рассмотрения:</strong> {{ pending }}</p>
-                <p><a href="/admin_panel?token={{ config.SECRET_KEY }}">Полная админ-панель</a></p>
-            </div>
-            
-            <h3>Последние 20 заявок</h3>
-            <table>
-                <tr>
-                    <th>ID</th><th>ФИО</th><th>Оружие</th><th>Статус</th><th>Дата</th>
-                </tr>
-                {% for r in regs %}
-                <tr>
-                    <td>{{ r.id }}</td>
-                    <td>{{ r.full_name }}</td>
-                    <td>{{ r.weapon_type }}</td>
-                    <td>
-                        <span class="badge {{ r.status }}">
-                            {% if r.status == 'pending' %}⏳ Ожидает
-                            {% elif r.status == 'confirmed' %}✅ Подтверждена
-                            {% else %}❌ Отклонена{% endif %}
-                        </span>
-                    </td>
-                    <td>{{ r.created_at.strftime('%d.%m.%Y %H:%M') }}</td>
-                </tr>
-                {% endfor %}
-            </table>
-            
-            <p style="margin-top: 30px;">
-                <a href="/health">Проверка состояния</a> | 
-                <a href="/set_webhook">Установить вебхук</a> | 
-                <a href="/test_data">Тестовые данные</a>
-            </p>
-        </body>
-        </html>
-        """, regs=regs, total=total, pending=pending, config=config)
+            # Используем реальный шаблон
+            return render_template(
+                'admin.html',
+                registrations=regs,
+                total=total,
+                pending=pending,
+                config=config
+            )
+    except Exception as e:
+        logger.error(f"Ошибка в админке: {e}")
+        return render_template('error.html', 
+                             code=500, 
+                             error=f"Внутренняя ошибка сервера: {str(e)}"), 500
 
 @app.route('/admin_panel')
 def admin_panel():
-    """Полная админ-панель"""
+    """Полная админ-панель с токеном"""
     token = request.args.get('token')
     
     if not token or token != config.SECRET_KEY:
@@ -550,129 +511,152 @@ def admin_panel():
                              code=403, 
                              error="Неверный токен доступа. Используйте: /admin_panel?token=ваш_секретный_ключ"), 403
     
-    with session_scope() as session:
-        regs = session.query(Registration).order_by(Registration.created_at.desc()).all()
-        
-        regs_data = []
-        for r in regs:
-            regs_data.append({
-                'id': r.id,
-                'telegram_id': r.telegram_id,
-                'username': r.username,
-                'full_name': r.full_name,
-                'weapon_type': r.weapon_type,
-                'category': r.category,
-                'age_group': r.age_group,
-                'phone': r.phone,
-                'experience': r.experience,
-                'status': r.status,
-                'created_at': r.created_at.isoformat() if r.created_at else None,
-                'updated_at': r.updated_at.isoformat() if r.updated_at else None
-            })
-        
-        admin_ids = config.get_admin_ids()
-        current_admin_id = admin_ids[0] if admin_ids else 0
-        
-        return render_template(
-            'admin.html',
-            registrations=regs,
-            registrations_json=regs_data,
-            config=config,
-            token=token,
-            current_admin_id=current_admin_id,
-            now=datetime.utcnow()
-        )
-
-@app.route('/api/registrations/<int:reg_id>/confirm')
-def confirm_registration_api(reg_id):
-    token = request.args.get('token')
-    if not token or token != config.SECRET_KEY:
-        return jsonify({'error': 'Invalid token'}), 403
-    
-    with session_scope() as session:
-        reg = session.query(Registration).get(reg_id)
-        if not reg:
-            return jsonify({'error': 'Registration not found'}), 404
-        
-        reg.status = 'confirmed'
-        session.add(reg)
-        
-        bot = get_bot()
-        if bot:
-            try:
-                bot.send_message(
-                    reg.telegram_id,
-                    f"✅ *Ваша заявка #{reg.id} подтверждена!*\n\n"
-                    f"Рады сообщить, что ваша заявка на участие в соревнованиях по фехтованию подтверждена.\n"
-                    f"Ждем вас на соревнованиях!\n\n"
-                    f"*Детали заявки:*\n"
-                    f"ФИО: {reg.full_name}\n"
-                    f"Оружие: {reg.weapon_type}\n"
-                    f"Категория: {reg.category}",
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
-    
-    return jsonify({'success': True, 'status': 'confirmed'})
-
-@app.route('/api/registrations/<int:reg_id>/reject')
-def reject_registration_api(reg_id):
-    token = request.args.get('token')
-    if not token or token != config.SECRET_KEY:
-        return jsonify({'error': 'Invalid token'}), 403
-    
-    with session_scope() as session:
-        reg = session.query(Registration).get(reg_id)
-        if not reg:
-            return jsonify({'error': 'Registration not found'}), 404
-        
-        reg.status = 'rejected'
-        session.add(reg)
-        
-        bot = get_bot()
-        if bot:
-            try:
-                bot.send_message(
-                    reg.telegram_id,
-                    f"❌ *Ваша заявка #{reg.id} отклонена*\n\n"
-                    f"К сожалению, ваша заявка на участие в соревнованиях была отклонена.\n"
-                    f"По вопросам обращайтесь к организаторам.",
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
-    
-    return jsonify({'success': True, 'status': 'rejected'})
+    try:
+        with session_scope() as session:
+            regs = session.query(Registration).order_by(Registration.created_at.desc()).all()
+            
+            regs_data = []
+            for r in regs:
+                regs_data.append({
+                    'id': r.id,
+                    'telegram_id': r.telegram_id,
+                    'username': r.username,
+                    'full_name': r.full_name,
+                    'weapon_type': r.weapon_type,
+                    'category': r.category,
+                    'age_group': r.age_group,
+                    'phone': r.phone,
+                    'experience': r.experience,
+                    'status': r.status,
+                    'created_at': r.created_at.isoformat() if r.created_at else None,
+                    'updated_at': r.updated_at.isoformat() if r.updated_at else None
+                })
+            
+            admin_ids = config.get_admin_ids()
+            current_admin_id = admin_ids[0] if admin_ids else 0
+            
+            return render_template(
+                'admin.html',
+                registrations=regs,
+                registrations_json=regs_data,
+                config=config,
+                token=token,
+                current_admin_id=current_admin_id,
+                now=datetime.utcnow()
+            )
+    except Exception as e:
+        logger.error(f"Ошибка в админ-панели: {e}")
+        return render_template('error.html', 
+                             code=500, 
+                             error=f"Внутренняя ошибка сервера: {str(e)}"), 500
 
 @app.route('/api/registrations')
 def get_registrations_api():
+    """API для получения заявок"""
     token = request.args.get('token')
     if not token or token != config.SECRET_KEY:
         return jsonify({'error': 'Invalid token'}), 403
     
-    status = request.args.get('status')
-    with session_scope() as session:
-        query = session.query(Registration)
-        if status:
-            query = query.filter_by(status=status)
-        regs = query.order_by(Registration.created_at.desc()).all()
+    try:
+        status = request.args.get('status')
+        with session_scope() as session:
+            query = session.query(Registration)
+            if status:
+                query = query.filter_by(status=status)
+            regs = query.order_by(Registration.created_at.desc()).all()
+            
+            result = []
+            for r in regs:
+                result.append({
+                    'id': r.id,
+                    'full_name': r.full_name,
+                    'weapon_type': r.weapon_type,
+                    'category': r.category,
+                    'age_group': r.age_group,
+                    'phone': r.phone,
+                    'experience': r.experience,
+                    'status': r.status,
+                    'created_at': r.created_at.isoformat() if r.created_at else None
+                })
+            
+            return jsonify({'registrations': result, 'count': len(result)})
+    except Exception as e:
+        logger.error(f"API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/registrations/<int:reg_id>/confirm')
+def confirm_registration_api(reg_id):
+    """API для подтверждения заявки"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    try:
+        with session_scope() as session:
+            reg = session.query(Registration).get(reg_id)
+            if not reg:
+                return jsonify({'error': 'Registration not found'}), 404
+            
+            reg.status = 'confirmed'
+            reg.updated_at = datetime.utcnow()
+            session.add(reg)
+            
+            bot = get_bot()
+            if bot:
+                try:
+                    bot.send_message(
+                        reg.telegram_id,
+                        f"✅ *Ваша заявка #{reg.id} подтверждена!*\n\n"
+                        f"Рады сообщить, что ваша заявка на участие в соревнованиях по фехтованию подтверждена.\n"
+                        f"Ждем вас на соревнованиях!\n\n"
+                        f"*Детали заявки:*\n"
+                        f"ФИО: {reg.full_name}\n"
+                        f"Оружие: {reg.weapon_type}\n"
+                        f"Категория: {reg.category}",
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
         
-        result = []
-        for r in regs:
-            result.append({
-                'id': r.id,
-                'full_name': r.full_name,
-                'weapon_type': r.weapon_type,
-                'category': r.category,
-                'age_group': r.age_group,
-                'phone': r.phone,
-                'experience': r.experience,
-                'status': r.status,
-                'created_at': r.created_at.isoformat() if r.created_at else None
-            })
+        return jsonify({'success': True, 'status': 'confirmed'})
+    except Exception as e:
+        logger.error(f"Confirm API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/registrations/<int:reg_id>/reject')
+def reject_registration_api(reg_id):
+    """API для отклонения заявки"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    try:
+        with session_scope() as session:
+            reg = session.query(Registration).get(reg_id)
+            if not reg:
+                return jsonify({'error': 'Registration not found'}), 404
+            
+            reg.status = 'rejected'
+            reg.updated_at = datetime.utcnow()
+            session.add(reg)
+            
+            bot = get_bot()
+            if bot:
+                try:
+                    bot.send_message(
+                        reg.telegram_id,
+                        f"❌ *Ваша заявка #{reg.id} отклонена*\n\n"
+                        f"К сожалению, ваша заявка на участие в соревнованиях была отклонена.\n"
+                        f"По вопросам обращайтесь к организаторам.",
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
         
-        return jsonify({'registrations': result, 'count': len(result)})
+        return jsonify({'success': True, 'status': 'rejected'})
+    except Exception as e:
+        logger.error(f"Reject API error: {e}")
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -688,7 +672,7 @@ def webhook():
             logger.error(f"❌ Ошибка обработки webhook: {e}")
     return 'ok'
 
-@app.route('/set_webhook')
+@app.route('/set_webhook', methods=['GET'])
 def set_webhook():
     """Установка вебхука"""
     try:
@@ -702,13 +686,13 @@ def set_webhook():
         
         if success:
             bot_info = bot.get_me()
-            return render_template_string("""
+            return f"""
             <h1>✅ Webhook установлен успешно!</h1>
-            <p><strong>URL:</strong> {{ url }}</p>
-            <p><strong>Бот:</strong> {{ bot_name }}</p>
+            <p><strong>URL:</strong> {webhook_url}</p>
+            <p><strong>Бот:</strong> {bot_info.first_name if bot_info else 'Unknown'}</p>
             <p><a href="/">На главную</a> | <a href="/admin">В админку</a></p>
             <p><a href="/health">Проверить состояние</a></p>
-            """, url=webhook_url, bot_name=bot_info.first_name if bot_info else "Unknown")
+            """
         else:
             return "❌ Не удалось установить webhook", 500
     except Exception as e:
@@ -733,26 +717,13 @@ def health():
         'bot': bot_status,
         'webhook_set': bool(get_bot() and get_bot().get_webhook_info().url if get_bot() else False),
         'timestamp': datetime.utcnow().isoformat(),
-        'version': '1.0.0'
+        'version': '1.0.0',
+        'endpoints': {
+            'admin': '/admin',
+            'health': '/health',
+            'set_webhook': '/set_webhook'
+        }
     })
-
-@app.route('/test_data')
-def test_data():
-    """Добавление тестовых данных"""
-    try:
-        from migrations import create_test_data
-        create_test_data()
-        return render_template_string("""
-        <h1>✅ Тестовые данные добавлены</h1>
-        <p>Теперь вы можете:</p>
-        <ul>
-            <li><a href="/admin_panel?token={{ token }}">Перейти в админ-панель</a></li>
-            <li><a href="/admin">Просмотреть простую админку</a></li>
-            <li><a href="/">Вернуться на главную</a></li>
-        </ul>
-        """, token=config.SECRET_KEY)
-    except Exception as e:
-        return f"❌ Ошибка при добавлении тестовых данных: {str(e)}", 500
 
 @app.errorhandler(404)
 def not_found_error(error):
@@ -773,25 +744,7 @@ def forbidden_error(error):
                          code=403, 
                          error="Доступ запрещен. У вас нет прав для просмотра этой страницы."), 403
 
-# ===== Функция для установки webhook при старте =====
-def setup_webhook_on_start():
-    """Установка вебхука при запуске приложения"""
-    def delayed_webhook_setup():
-        time.sleep(10)  # Ждем 10 секунд чтобы сервер запустился
-        try:
-            bot = get_bot()
-            if bot:
-                webhook_url = config.get_webhook_url()
-                bot.set_webhook(webhook_url)
-                logger.info(f"✅ Webhook установлен: {webhook_url}")
-        except Exception as e:
-            logger.error(f"❌ Ошибка установки webhook при старте: {e}")
-    
-    thread = threading.Thread(target=delayed_webhook_setup, daemon=True)
-    thread.start()
-
-# Устанавливаем webhook при импорте модуля
-setup_webhook_on_start()
-
+# ===== Запуск приложения =====
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=config.PORT, debug=config.DEBUG)
+    port = int(os.environ.get('PORT', config.PORT))
+    app.run(host='0.0.0.0', port=port, debug=config.DEBUG)
