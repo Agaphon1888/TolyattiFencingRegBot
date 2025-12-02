@@ -5,7 +5,11 @@
 
 import sys
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Добавляем корневую директорию в путь Python
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+sys.path.insert(0, parent_dir)
 
 from config import config
 import psycopg2
@@ -38,6 +42,36 @@ def fix_database_columns():
             print("   ✅ Столбец 'admin_comment' добавлен")
         else:
             print("   ✅ Столбец 'admin_comment' уже существует")
+        
+        # 2. Проверяем и добавляем столбец created_at в registrations
+        print("\n2. Проверяем столбец 'created_at' в таблице 'registrations'...")
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'registrations' AND column_name = 'created_at'
+        """)
+        
+        if not cursor.fetchone():
+            print("   ⚠️ Столбец 'created_at' не найден, добавляем...")
+            cursor.execute("ALTER TABLE registrations ADD COLUMN created_at TIMESTAMP DEFAULT NOW()")
+            print("   ✅ Столбец 'created_at' добавлен")
+        else:
+            print("   ✅ Столбец 'created_at' уже существует")
+        
+        # 3. Проверяем и добавляем столбец username в registrations
+        print("\n3. Проверяем столбец 'username' в таблице 'registrations'...")
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'registrations' AND column_name = 'username'
+        """)
+        
+        if not cursor.fetchone():
+            print("   ⚠️ Столбец 'username' не найден, добавляем...")
+            cursor.execute("ALTER TABLE registrations ADD COLUMN username VARCHAR(100)")
+            print("   ✅ Столбец 'username' добавлен")
+        else:
+            print("   ✅ Столбец 'username' уже существует")
         
         print("\n✅ Схема базы данных проверена!")
         
