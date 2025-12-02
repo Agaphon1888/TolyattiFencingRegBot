@@ -255,18 +255,19 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
 
     data = context.user_data
     with session_scope() as session:
-        existing = session.query(Registration).filter_by(
-            telegram_id=data['telegram_id'],
-            status='pending'
-        ).first()
+        # ВРЕМЕННО ЗАКОММЕНТИРОВАНО - из-за проблем с created_at
+        # existing = session.query(Registration).filter_by(
+        #     telegram_id=data['telegram_id'],
+        #     status='pending'
+        # ).first()
         
-        if existing:
-            update.message.reply_text(
-                "⚠️ У вас уже есть активная заявка на рассмотрении.\n"
-                "Используйте /myregistrations для просмотра статуса.",
-                reply_markup=None
-            )
-            return ConversationHandler.END
+        # if existing:
+        #     update.message.reply_text(
+        #         "⚠️ У вас уже есть активная заявка на рассмотрении.\n"
+        #         "Используйте /myregistrations для просмотра статуса.",
+        #         reply_markup=None
+        #     )
+        #     return ConversationHandler.END
             
         reg = Registration(
             telegram_id=data['telegram_id'],
@@ -280,7 +281,6 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
             status='pending'
         )
         session.add(reg)
-        session.commit()  # Явный коммит для получения ID
     
     # Уведомляем администраторов
     admin_ids = config.get_admin_ids()
@@ -312,7 +312,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
     
     context.user_data.clear()
     return ConversationHandler.END
-
+    
 def cancel(update: Update, context: CallbackContext) -> int:
     update.message.reply_text(
         "Регистрация отменена.\n"
