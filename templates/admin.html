@@ -39,6 +39,43 @@
             margin-right: 10px; 
         }
         .token-form { margin: 20px 0; }
+        
+        /* Модальные окна */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+        }
+        .modal-content {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            max-width: 800px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            cursor: pointer;
+        }
     </style>
 </head>
 <body>
@@ -53,6 +90,10 @@
             <a href="/health">Проверка состояния</a> | 
             <a href="/set_webhook">Установить вебхук</a> |
             <a href="/admin?simple=1">Простая версия</a>
+        </p>
+        <p>
+            <button onclick="showEvents()" class="action-btn btn-view">📅 Управление событиями</button>
+            <button onclick="showCleanup()" class="action-btn btn-reject">🗑️ Очистка старых заявок</button>
         </p>
     </div>
     
@@ -69,6 +110,40 @@
     <h3>Заявки</h3>
     <div id="registrations">
         <p>Введите токен выше для загрузки заявок</p>
+    </div>
+    
+    <!-- Модальное окно для управления событиями -->
+    <div id="events-modal" class="modal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="hideEvents()">×</button>
+            <h3>📅 Управление событиями</h3>
+            <div id="events-list"></div>
+            <hr>
+            <h4>Добавить новое событие</h4>
+            <input type="text" id="event-name" placeholder="Название соревнования" style="width: 100%; padding: 8px; margin: 5px 0;">
+            <input type="date" id="event-date" style="width: 100%; padding: 8px; margin: 5px 0;">
+            <textarea id="event-desc" placeholder="Описание" style="width: 100%; padding: 8px; margin: 5px 0; height: 100px;"></textarea>
+            <button onclick="addEvent()" class="action-btn btn-confirm">Добавить</button>
+            <button onclick="hideEvents()" class="action-btn btn-reject" style="margin-left: 10px;">Закрыть</button>
+        </div>
+    </div>
+    
+    <!-- Модальное окно для очистки заявок -->
+    <div id="cleanup-modal" class="modal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="hideCleanup()">×</button>
+            <h3>🗑️ Очистка старых заявок</h3>
+            <p>Выберите тип очистки:</p>
+            <div style="margin: 20px 0;">
+                <label><input type="radio" name="cleanup-type" value="past_events" checked> Удалить заявки на прошедшие события</label><br>
+                <label><input type="radio" name="cleanup-type" value="all_rejected"> Удалить все отклоненные заявки</label><br>
+                <label><input type="radio" name="cleanup-type" value="all_old"> Удалить все заявки старше 30 дней</label>
+            </div>
+            <p id="cleanup-preview"></p>
+            <button onclick="previewCleanup()" class="action-btn btn-view">Предпросмотр</button>
+            <button onclick="executeCleanup()" class="action-btn btn-reject">Выполнить очистку</button>
+            <button onclick="hideCleanup()" class="action-btn" style="margin-left: 10px; background: #6c757d; color: white;">Отмена</button>
+        </div>
     </div>
     
     <script>
@@ -125,6 +200,8 @@
                         <th>ФИО</th>
                         <th>Оружие</th>
                         <th>Телефон</th>
+                        <th>Примечание (опыт)</th>
+                        <th>Событие</th>
                         <th>Статус</th>
                         <th>Дата</th>
                         <th>Действия</th>
@@ -136,12 +213,16 @@
                                      reg.status === 'confirmed' ? '✅ Подтверждена' : '❌ Отклонена';
                     
                     const date = reg.created_at ? new Date(reg.created_at).toLocaleString('ru-RU') : 'Не указана';
+                    const experience = reg.experience || '';
+                    const truncatedExp = experience.length > 50 ? experience.substring(0, 50) + '...' : experience;
                     
                     html += `<tr>
                         <td>${reg.id}</td>
                         <td>${reg.full_name || 'Не указано'}</td>
                         <td>${reg.weapon_type || 'Не указано'}</td>
                         <td>${reg.phone || 'Не указано'}</td>
+                        <td title="${experience}">${truncatedExp || 'Нет'}</td>
+                        <td>${reg.event_name || 'Не указано'}</td>
                         <td><span class="badge ${statusClass}">${statusText}</span></td>
                         <td>${date}</td>
                         <td>
@@ -150,6 +231,8 @@
                                  <button onclick="updateStatus(${reg.id}, 'reject')" class="action-btn btn-reject">❌ Отклонить</button>` : 
                                 '<span>—</span>'
                             }
+                            <button onclick="viewDetails(${reg.id}, '${reg.full_name}', '${reg.experience}')" 
+                                    class="action-btn btn-view" title="Подробности">👁️</button>
                         </td>
                     </tr>`;
                 });
@@ -198,8 +281,190 @@
             }
         }
         
+        function viewDetails(id, name, experience) {
+            alert(`Детали заявки #${id}\n\nФИО: ${name}\n\nОпыт и достижения:\n${experience || 'Не указано'}`);
+        }
+        
         function showSimpleView() {
             window.location.href = '/admin?simple=1';
+        }
+        
+        // Управление событиями
+        function showEvents() {
+            if (!currentToken) {
+                alert('Сначала введите токен доступа');
+                return;
+            }
+            document.getElementById('events-modal').style.display = 'block';
+            loadEvents();
+        }
+        
+        function hideEvents() {
+            document.getElementById('events-modal').style.display = 'none';
+        }
+        
+        async function loadEvents() {
+            try {
+                const response = await fetch('/api/events?token=' + encodeURIComponent(currentToken));
+                const data = await response.json();
+                
+                if (data.error) {
+                    document.getElementById('events-list').innerHTML = 
+                        `<div class="error">Ошибка загрузки событий: ${data.error}</div>`;
+                    return;
+                }
+                
+                if (data.events.length === 0) {
+                    document.getElementById('events-list').innerHTML = 
+                        '<div class="warning">Нет событий для отображения</div>';
+                    return;
+                }
+                
+                let html = '<table style="width: 100%; margin: 20px 0;">';
+                html += '<tr><th>ID</th><th>Название</th><th>Дата</th><th>Статус</th><th>Действия</th></tr>';
+                
+                data.events.forEach(event => {
+                    const date = new Date(event.event_date).toLocaleDateString('ru-RU');
+                    const isActive = event.is_active ? '🟢 Активно' : '🔴 Неактивно';
+                    const isPast = new Date(event.event_date) < new Date();
+                    
+                    html += `<tr>
+                        <td>${event.id}</td>
+                        <td>${event.name}</td>
+                        <td>${date} ${isPast ? '(прошло)' : ''}</td>
+                        <td>${isActive}</td>
+                        <td>
+                            <button onclick="toggleEvent(${event.id}, ${!event.is_active})" class="action-btn btn-view">
+                                ${event.is_active ? 'Деактивировать' : 'Активировать'}
+                            </button>
+                            <button onclick="deleteEvent(${event.id})" class="action-btn btn-reject">Удалить</button>
+                        </td>
+                    </tr>`;
+                });
+                
+                html += '</table>';
+                document.getElementById('events-list').innerHTML = html;
+            } catch (error) {
+                document.getElementById('events-list').innerHTML = 
+                    `<div class="error">Ошибка загрузки: ${error.message}</div>`;
+            }
+        }
+        
+        async function addEvent() {
+            const name = document.getElementById('event-name').value;
+            const date = document.getElementById('event-date').value;
+            const desc = document.getElementById('event-desc').value;
+            
+            if (!name || !date) {
+                alert('Заполните название и дату события');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/events?token=' + encodeURIComponent(currentToken), {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({name, event_date: date, description: desc})
+                });
+                
+                const data = await response.json();
+                if (data.success) {
+                    alert('✅ Событие добавлено');
+                    loadEvents();
+                    document.getElementById('event-name').value = '';
+                    document.getElementById('event-date').value = '';
+                    document.getElementById('event-desc').value = '';
+                } else {
+                    alert('❌ Ошибка: ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ Ошибка: ' + error.message);
+            }
+        }
+        
+        async function toggleEvent(eventId, newState) {
+            try {
+                const response = await fetch(`/api/events/${eventId}/toggle?token=${encodeURIComponent(currentToken)}`);
+                const data = await response.json();
+                if (data.success) {
+                    loadEvents();
+                } else {
+                    alert('❌ Ошибка: ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ Ошибка: ' + error.message);
+            }
+        }
+        
+        async function deleteEvent(eventId) {
+            if (!confirm('Удалить событие? Все связанные заявки будут сохранены, но без привязки к событию.')) return;
+            
+            try {
+                const response = await fetch(`/api/events/${eventId}?token=${encodeURIComponent(currentToken)}`, {method: 'DELETE'});
+                const data = await response.json();
+                if (data.success) {
+                    loadEvents();
+                } else {
+                    alert('❌ Ошибка: ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ Ошибка: ' + error.message);
+            }
+        }
+        
+        // Очистка заявок
+        function showCleanup() {
+            if (!currentToken) {
+                alert('Сначала введите токен доступа');
+                return;
+            }
+            document.getElementById('cleanup-modal').style.display = 'block';
+            document.getElementById('cleanup-preview').innerHTML = '';
+        }
+        
+        function hideCleanup() {
+            document.getElementById('cleanup-modal').style.display = 'none';
+        }
+        
+        async function previewCleanup() {
+            const type = document.querySelector('input[name="cleanup-type"]:checked').value;
+            
+            try {
+                const response = await fetch(`/api/cleanup/preview?type=${type}&token=${encodeURIComponent(currentToken)}`);
+                const data = await response.json();
+                
+                if (data.count > 0) {
+                    document.getElementById('cleanup-preview').innerHTML = 
+                        `Будет удалено: <strong>${data.count}</strong> заявок`;
+                } else {
+                    document.getElementById('cleanup-preview').innerHTML = 
+                        '<div class="warning">Нет заявок для удаления</div>';
+                }
+            } catch (error) {
+                document.getElementById('cleanup-preview').innerHTML = 
+                    `<div class="error">Ошибка: ${error.message}</div>`;
+            }
+        }
+        
+        async function executeCleanup() {
+            const type = document.querySelector('input[name="cleanup-type"]:checked').value;
+            
+            if (!confirm(`Вы уверены, что хотите удалить заявки (тип: ${type})?`)) return;
+            
+            try {
+                const response = await fetch(`/api/cleanup/execute?type=${type}&token=${encodeURIComponent(currentToken)}`, {method: 'POST'});
+                const data = await response.json();
+                
+                if (data.success) {
+                    alert(`✅ Удалено ${data.deleted_count} заявок`);
+                    hideCleanup();
+                    loadData(); // Перезагружаем список заявок
+                } else {
+                    alert('❌ Ошибка: ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ Ошибка: ' + error.message);
+            }
         }
         
         // Если в URL есть токен, используем его
@@ -215,6 +480,13 @@
         
         if (simpleMode === '1') {
             showSimpleView();
+        }
+        
+        // Закрытие модальных окон при клике вне их
+        window.onclick = function(event) {
+            if (event.target.classList.contains('modal')) {
+                event.target.style.display = 'none';
+            }
         }
     </script>
 </body>
