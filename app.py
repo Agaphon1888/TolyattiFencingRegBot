@@ -8,8 +8,8 @@ from datetime import datetime, timedelta
 from functools import wraps
 import threading
 import time
-from sqlalchemy import ForeignKey
-from sqlalchemy.orm import relationship
+# from sqlalchemy import ForeignKey
+# from sqlalchemy.orm import relationship
 
 from config import config
 from database import init_db, get_session, Registration, Admin, Event, session_scope
