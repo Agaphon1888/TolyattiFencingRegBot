@@ -8,9 +8,11 @@ from datetime import datetime, timedelta
 from functools import wraps
 import threading
 import time
+from sqlalchemy import ForeignKey
+from sqlalchemy.orm import relationship
 
 from config import config
-from database import init_db, get_session, Registration, Admin, session_scope
+from database import init_db, get_session, Registration, Admin, Event, session_scope
 
 # ===== Инициализация приложения =====
 app = Flask(__name__)
@@ -84,7 +86,7 @@ def tojson(value):
     return json.dumps(value, ensure_ascii=False, default=str)
 
 # ===== Состояния регистрации =====
-NAME, WEAPON, CATEGORY, AGE, PHONE, EXPERIENCE, CONFIRM = range(7)
+NAME, WEAPON, CATEGORY, AGE, PHONE, EVENT, EXPERIENCE, CONFIRM = range(8)
 
 # ===== Декораторы для проверки прав =====
 def admin_required(func):
@@ -110,6 +112,30 @@ def super_admin_required(func):
     return wrapper
 
 # ===== Команды Telegram бота =====
+def send_example(update: Update, context: CallbackContext):
+    """Отправляет пример заполнения заявки"""
+    example_text = """
+📋 *Пример заполнения заявки:*
+
+*ФИО:* Иванов Иван Иванович
+*Оружие:* Сабля
+*Категория:* Взрослые
+*Возрастная группа:* 19+ лет
+*Телефон:* +79991234567
+*Опыт и достижения:*
+- КМС по фехтованию
+- 5 лет стажа
+- Участник чемпионата области 2023
+- Победитель городского турнира 2022
+
+*Важно:*
+• Указывайте полное ФИО
+• Телефон должен быть действительным
+• Подробно опишите опыт и достижения
+• Выберите актуальное соревнование
+"""
+    update.message.reply_text(example_text, parse_mode='Markdown')
+
 def start(update: Update, context: CallbackContext) -> int:
     user = update.message.from_user
     context.user_data.clear()
@@ -126,7 +152,15 @@ def start(update: Update, context: CallbackContext) -> int:
 2. Выбор оружия
 3. Категория и возрастная группа
 4. Контактный телефон
-5. Информация об опыте
+5. Информация об опыте и достижениях
+6. Выбор соревнования
+
+📋 *Пример заполнения:*
+ФИО: Иванов Иван Иванович
+Телефон: +79991234567
+Опыт: КМС, 5 лет стажа, участник чемпионата области
+
+*Для просмотра подробного примера используйте команду /example*
 
 *Давайте начнем!*
 
@@ -212,16 +246,82 @@ def get_phone(update: Update, context: CallbackContext) -> int:
         
         context.user_data['phone'] = f'+{phone_digits}'
     
+    # Переходим к выбору события
+    return get_event(update, context)
+
+def get_event(update: Update, context: CallbackContext) -> int:
+    """Выбор события/соревнования"""
+    with session_scope() as session:
+        # Получаем активные события (будущие)
+        events = session.query(Event).filter(
+            Event.is_active == True,
+            Event.event_date >= datetime.now().date()
+        ).order_by(Event.event_date).all()
+        
+        if not events:
+            update.message.reply_text(
+                "❌ В данный момент нет доступных соревнований для регистрации.\n"
+                "Попробуйте позже или обратитесь к организаторам."
+            )
+            return ConversationHandler.END
+        
+        # Создаем клавиатуру с событиями
+        kb = [[f"{e.name} ({e.event_date.strftime('%d.%m.%Y')})"] for e in events]
+        rm = ReplyKeyboardMarkup(kb, one_time_keyboard=True, resize_keyboard=True)
+        
+        event_list = "\n".join([f"{i+1}. {e.name} - {e.event_date.strftime('%d.%m.%Y')}" 
+                               for i, e in enumerate(events)])
+        
+        update.message.reply_text(
+            f"📅 *Выберите соревнование:*\n\n{event_list}\n\n"
+            "Нажмите на нужное соревнование в клавиатуре ниже:",
+            parse_mode='Markdown',
+            reply_markup=rm
+        )
+        return EVENT
+
+def select_event(update: Update, context: CallbackContext) -> int:
+    """Обработка выбора события"""
+    event_choice = update.message.text
+    
+    with session_scope() as session:
+        # Пытаемся найти событие по названию и дате
+        events = session.query(Event).filter(
+            Event.is_active == True,
+            Event.event_date >= datetime.now().date()
+        ).all()
+        
+        selected_event = None
+        for event in events:
+            event_str = f"{event.name} ({event.event_date.strftime('%d.%m.%Y')})"
+            if event_choice == event_str:
+                selected_event = event
+                break
+        
+        if not selected_event:
+            update.message.reply_text(
+                "❌ Пожалуйста, выберите соревнование из списка ниже.",
+                reply_markup=None
+            )
+            return get_event(update, context)
+        
+        context.user_data['event_id'] = selected_event.id
+        context.user_data['event_name'] = selected_event.name
+    
     update.message.reply_text(
-        "Опишите ваш опыт:\n\n"
+        "Опишите ваш опыт, достижения, разряды и стаж занятий:\n\n"
         "• Разряд/звание (если есть)\n"
-        "• Стаж занятий\n"
+        "• Стаж занятий (сколько лет)\n"
         "• Участие в соревнованиях\n"
-        "• Дополнительная информация"
+        "• Достижения и награды\n"
+        "• Дополнительная информация\n\n"
+        "*Пример:* КМС по фехтованию, 5 лет стажа, участник чемпионата области 2023, победитель городского турнира 2022",
+        parse_mode='Markdown'
     )
     return EXPERIENCE
 
 def get_experience(update: Update, context: CallbackContext) -> int:
+    """Получение информации об опыте"""
     experience = update.message.text.strip()
     if len(experience) < 10:
         update.message.reply_text("❌ Пожалуйста, опишите ваш опыт более подробно (минимум 10 символов)")
@@ -238,6 +338,7 @@ def get_experience(update: Update, context: CallbackContext) -> int:
 *Категория:* {data['category']}
 *Возрастная группа:* {data['age_group']}
 *Телефон:* {data['phone']}
+*Соревнование:* {data.get('event_name', 'Не указано')}
 *Опыт:* {data['experience'][:100]}{'...' if len(data['experience']) > 100 else ''}
 
 Всё правильно?
@@ -249,26 +350,14 @@ def get_experience(update: Update, context: CallbackContext) -> int:
     return CONFIRM
 
 def confirm_registration(update: Update, context: CallbackContext) -> int:
+    """Подтверждение регистрации"""
     if update.message.text == '❌ Нет, исправить':
         update.message.reply_text("Начнем заново. Введите ваше ФИО:", reply_markup=None)
         return NAME
 
     data = context.user_data
+    
     with session_scope() as session:
-        # ВРЕМЕННО ЗАКОММЕНТИРОВАНО - из-за проблем с created_at
-        # existing = session.query(Registration).filter_by(
-        #     telegram_id=data['telegram_id'],
-        #     status='pending'
-        # ).first()
-        
-        # if existing:
-        #     update.message.reply_text(
-        #         "⚠️ У вас уже есть активная заявка на рассмотрении.\n"
-        #         "Используйте /myregistrations для просмотра статуса.",
-        #         reply_markup=None
-        #     )
-        #     return ConversationHandler.END
-            
         reg = Registration(
             telegram_id=data['telegram_id'],
             username=data.get('username'),
@@ -278,7 +367,8 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
             age_group=data['age_group'],
             phone=data['phone'],
             experience=data['experience'],
-            status='pending'
+            status='pending',
+            event_id=data.get('event_id')
         )
         session.add(reg)
         session.commit()  # Явный коммит для получения ID
@@ -293,6 +383,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
 ФИО: {data['full_name']}
 Оружие: {data['weapon_type']}
 Телефон: {data['phone']}
+Соревнование: {data.get('event_name', 'Не указано')}
 
 Для просмотра заявок используйте команду /admin_stats"""
         
@@ -315,6 +406,7 @@ def confirm_registration(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 def cancel(update: Update, context: CallbackContext) -> int:
+    """Отмена регистрации"""
     update.message.reply_text(
         "Регистрация отменена.\n"
         "Если хотите начать заново, используйте /start",
@@ -324,6 +416,7 @@ def cancel(update: Update, context: CallbackContext) -> int:
     return ConversationHandler.END
 
 def view_registrations(update: Update, context: CallbackContext):
+    """Просмотр заявок пользователя"""
     with session_scope() as session:
         regs = session.query(Registration).filter_by(
             telegram_id=update.message.from_user.id
@@ -341,10 +434,13 @@ def view_registrations(update: Update, context: CallbackContext):
                 'rejected': '❌ Отклонена'
             }.get(r.status, '❓ Неизвестно')
             
+            event_name = r.event.name if r.event else "Не указано"
+            
             msg += f"*Заявка #{r.id}*\n"
             msg += f"ФИО: {r.full_name}\n"
             msg += f"Оружие: {r.weapon_type}\n"
             msg += f"Категория: {r.category}\n"
+            msg += f"Соревнование: {event_name}\n"
             msg += f"Статус: {status_ru}\n"
             msg += f"Дата: {r.created_at.strftime('%d.%m.%Y %H:%M') if r.created_at else 'Не указана'}\n"
             msg += "─" * 20 + "\n\n"
@@ -352,10 +448,12 @@ def view_registrations(update: Update, context: CallbackContext):
         update.message.reply_text(msg, parse_mode='Markdown')
 
 def help_command(update: Update, context: CallbackContext):
+    """Справка по командам"""
     help_text = """
 🤖 *Доступные команды:*
 
 /start - Начать регистрацию на соревнования
+/example - Пример заполнения заявки
 /myregistrations - Просмотреть мои заявки
 /cancel - Отменить текущую регистрацию
 /help - Показать справку
@@ -372,6 +470,7 @@ def help_command(update: Update, context: CallbackContext):
 
 @admin_required
 def admin_stats(update: Update, context: CallbackContext):
+    """Статистика для администраторов"""
     with session_scope() as session:
         regs = session.query(Registration).all()
         total = len(regs)
@@ -391,6 +490,7 @@ def admin_stats(update: Update, context: CallbackContext):
 
 @super_admin_required
 def admin_add(update: Update, context: CallbackContext):
+    """Добавление администратора"""
     if not context.args:
         update.message.reply_text("Использование: /admin_add <telegram_id> [роль]")
         return
@@ -418,6 +518,7 @@ def admin_add(update: Update, context: CallbackContext):
 
 @admin_required
 def admin_list(update: Update, context: CallbackContext):
+    """Список администраторов"""
     with session_scope() as session:
         admins = session.query(Admin).all()
         msg = "👥 *Администраторы:*\n"
@@ -442,6 +543,7 @@ def setup_dispatcher():
             CATEGORY: [MessageHandler(Filters.text & ~Filters.command, get_category)],
             AGE: [MessageHandler(Filters.text & ~Filters.command, get_age)],
             PHONE: [MessageHandler(Filters.text | Filters.contact, get_phone)],
+            EVENT: [MessageHandler(Filters.text & ~Filters.command, select_event)],
             EXPERIENCE: [MessageHandler(Filters.text & ~Filters.command, get_experience)],
             CONFIRM: [MessageHandler(Filters.text & ~Filters.command, confirm_registration)],
         },
@@ -451,6 +553,7 @@ def setup_dispatcher():
 
     dp = Dispatcher(bot, None, workers=1, use_context=True)
     dp.add_handler(conv_handler)
+    dp.add_handler(CommandHandler('example', send_example))
     dp.add_handler(CommandHandler('help', help_command))
     dp.add_handler(CommandHandler('myregistrations', view_registrations))
     dp.add_handler(CommandHandler('admin_stats', admin_stats))
@@ -465,14 +568,15 @@ dp_instance = setup_dispatcher()
 # ===== Веб-маршруты Flask =====
 @app.route('/')
 def home():
+    """Главная страница"""
     return jsonify({
         "status": "running",
         "service": "Tolyatti Fencing Registration Bot",
-        "version": "1.0.0",
+        "version": "2.0.0",
         "timestamp": datetime.utcnow().isoformat(),
         "endpoints": {
             "admin": "/admin",
-            "admin_panel": "/admin_panel?token=b1e807aeb2b1425995b17e1694296448",
+            "admin_panel": "/admin?token=b1e807aeb2b1425995b17e1694296448",
             "health": "/health",
             "webhook": "/webhook (POST)",
             "api": "/api/registrations?token=b1e807aeb2b1425995b17e1694296448"
@@ -528,7 +632,7 @@ def admin_page():
                     {% if regs %}
                     <table>
                         <tr>
-                            <th>ID</th><th>ФИО</th><th>Оружие</th><th>Телефон</th><th>Статус</th><th>Дата</th>
+                            <th>ID</th><th>ФИО</th><th>Оружие</th><th>Телефон</th><th>Опыт</th><th>Событие</th><th>Статус</th><th>Дата</th>
                         </tr>
                         {% for r in regs %}
                         <tr>
@@ -536,6 +640,8 @@ def admin_page():
                             <td>{{ r.full_name }}</td>
                             <td>{{ r.weapon_type }}</td>
                             <td>{{ r.phone }}</td>
+                            <td>{{ r.experience[:50] }}{% if r.experience|length > 50 %}...{% endif %}</td>
+                            <td>{{ r.event.name if r.event else 'Не указано' }}</td>
                             <td>
                                 <span class="badge {{ r.status }}">
                                     {% if r.status == 'pending' %}⏳ Ожидает
@@ -593,6 +699,8 @@ def get_registrations_api():
                     'phone': r.phone,
                     'experience': r.experience,
                     'status': r.status,
+                    'event_id': r.event_id,
+                    'event_name': r.event.name if r.event else None,
                     'created_at': r.created_at.isoformat() if r.created_at else None
                 })
             
@@ -630,7 +738,8 @@ def confirm_registration_api(reg_id):
                         f"Детали заявки:\n"
                         f"ФИО: {reg.full_name}\n"
                         f"Оружие: {reg.weapon_type}\n"
-                        f"Категория: {reg.category}"
+                        f"Категория: {reg.category}\n"
+                        f"Соревнование: {reg.event.name if reg.event else 'Не указано'}"
                     )
                 except Exception as e:
                     logger.error(f"Не удалось отправить уведомление пользователю {reg.telegram_id}: {e}")
@@ -673,6 +782,195 @@ def reject_registration_api(reg_id):
         return jsonify({'success': True, 'status': 'rejected'})
     except Exception as e:
         logger.error(f"Reject API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ===== API для управления событиями =====
+@app.route('/api/events')
+def get_events_api():
+    """API для получения событий"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    try:
+        with session_scope() as session:
+            events = session.query(Event).order_by(Event.event_date).all()
+            result = [{
+                'id': e.id,
+                'name': e.name,
+                'event_date': e.event_date.isoformat() if e.event_date else None,
+                'description': e.description,
+                'is_active': e.is_active,
+                'created_at': e.created_at.isoformat() if e.created_at else None
+            } for e in events]
+            return jsonify({'events': result})
+    except Exception as e:
+        logger.error(f"Events API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/events', methods=['POST'])
+def create_event_api():
+    """API для создания события"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    try:
+        data = request.get_json()
+        if not data.get('name') or not data.get('event_date'):
+            return jsonify({'error': 'Name and date are required'}), 400
+        
+        with session_scope() as session:
+            event = Event(
+                name=data['name'],
+                event_date=datetime.strptime(data['event_date'], '%Y-%m-%d').date(),
+                description=data.get('description', ''),
+                is_active=True
+            )
+            session.add(event)
+        
+        return jsonify({'success': True, 'event': {
+            'id': event.id,
+            'name': event.name,
+            'event_date': event.event_date.isoformat(),
+            'description': event.description
+        }})
+    except Exception as e:
+        logger.error(f"Create event API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/events/<int:event_id>/toggle')
+def toggle_event_api(event_id):
+    """API для переключения активности события"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    try:
+        with session_scope() as session:
+            event = session.query(Event).get(event_id)
+            if not event:
+                return jsonify({'error': 'Event not found'}), 404
+            
+            event.is_active = not event.is_active
+            event.updated_at = datetime.utcnow()
+        
+        return jsonify({'success': True, 'is_active': event.is_active})
+    except Exception as e:
+        logger.error(f"Toggle event API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/events/<int:event_id>', methods=['DELETE'])
+def delete_event_api(event_id):
+    """API для удаления события"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    try:
+        with session_scope() as session:
+            event = session.query(Event).get(event_id)
+            if not event:
+                return jsonify({'error': 'Event not found'}), 404
+            
+            # Не удаляем, а деактивируем и отвязываем заявки
+            event.is_active = False
+            
+            # Отвязываем заявки от этого события
+            registrations = session.query(Registration).filter_by(event_id=event_id).all()
+            for reg in registrations:
+                reg.event_id = None
+            
+            session.delete(event)
+        
+        return jsonify({'success': True})
+    except Exception as e:
+        logger.error(f"Delete event API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ===== API для очистки заявок =====
+@app.route('/api/cleanup/preview')
+def preview_cleanup_api():
+    """API для предпросмотра очистки"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    cleanup_type = request.args.get('type', 'past_events')
+    
+    try:
+        with session_scope() as session:
+            count = 0
+            
+            if cleanup_type == 'past_events':
+                # Заявки на прошедшие события
+                count = session.query(Registration).join(Event).filter(
+                    Event.event_date < datetime.now().date()
+                ).count()
+            
+            elif cleanup_type == 'all_rejected':
+                # Все отклоненные заявки
+                count = session.query(Registration).filter_by(status='rejected').count()
+            
+            elif cleanup_type == 'all_old':
+                # Все заявки старше 30 дней
+                cutoff_date = datetime.utcnow() - timedelta(days=30)
+                count = session.query(Registration).filter(
+                    Registration.created_at < cutoff_date
+                ).count()
+        
+        return jsonify({'count': count})
+    except Exception as e:
+        logger.error(f"Cleanup preview API error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/cleanup/execute', methods=['POST'])
+def execute_cleanup_api():
+    """API для выполнения очистки"""
+    token = request.args.get('token')
+    if not token or token != config.SECRET_KEY:
+        return jsonify({'error': 'Invalid token'}), 403
+    
+    cleanup_type = request.args.get('type', 'past_events')
+    
+    try:
+        with session_scope() as session:
+            deleted_count = 0
+            
+            if cleanup_type == 'past_events':
+                # Удаляем заявки на прошедшие события
+                registrations = session.query(Registration).join(Event).filter(
+                    Event.event_date < datetime.now().date()
+                ).all()
+                
+                for reg in registrations:
+                    session.delete(reg)
+                    deleted_count += 1
+            
+            elif cleanup_type == 'all_rejected':
+                # Удаляем все отклоненные заявки
+                registrations = session.query(Registration).filter_by(status='rejected').all()
+                
+                for reg in registrations:
+                    session.delete(reg)
+                    deleted_count += 1
+            
+            elif cleanup_type == 'all_old':
+                # Удаляем все заявки старше 30 дней
+                cutoff_date = datetime.utcnow() - timedelta(days=30)
+                registrations = session.query(Registration).filter(
+                    Registration.created_at < cutoff_date
+                ).all()
+                
+                for reg in registrations:
+                    session.delete(reg)
+                    deleted_count += 1
+            
+            session.commit()
+        
+        return jsonify({'success': True, 'deleted_count': deleted_count})
+    except Exception as e:
+        logger.error(f"Cleanup execute API error: {e}")
         return jsonify({'error': str(e)}), 500
 
 @app.route('/webhook', methods=['POST'])
@@ -734,7 +1032,7 @@ def health():
         'bot': bot_status,
         'webhook_set': bool(get_bot() and get_bot().get_webhook_info().url if get_bot() else False),
         'timestamp': datetime.utcnow().isoformat(),
-        'version': '1.0.0',
+        'version': '2.0.0',
         'endpoints': {
             'admin': '/admin',
             'health': '/health',
