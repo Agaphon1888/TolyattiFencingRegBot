@@ -1,8 +1,8 @@
 import os
 import logging
-from sqlalchemy import create_engine, Column, BigInteger, String, Boolean, DateTime, Text, inspect, text
+from sqlalchemy import create_engine, Column, BigInteger, String, Boolean, DateTime, Text, inspect, text, Integer, Date, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, scoped_session
+from sqlalchemy.orm import sessionmaker, scoped_session, relationship
 from datetime import datetime
 from contextlib import contextmanager
 
@@ -12,6 +12,7 @@ logging.basicConfig(level=getattr(logging, config.LOG_LEVEL))
 logger = logging.getLogger(__name__)
 
 Base = declarative_base()
+
 
 class Event(Base):
     __tablename__ = 'events'
@@ -34,6 +35,7 @@ class Event(Base):
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
+
 
 class Registration(Base):
     __tablename__ = 'registrations'
@@ -241,14 +243,14 @@ def fix_database_schema():
             
             for column_name, column_type in expected_columns.items():
                 if column_name not in column_names:
-                    logger.warning(f"   ⚠️ Колонка '{column_name}' не найдена, добавляем...")
+                    logger.warning(f"   ⚠️ Колонка '{column_name}' не найден, добавляем...")
                     try:
                         if column_name == 'updated_at':
                             session.execute(text(f"ALTER TABLE registrations ADD COLUMN {column_name} {column_type} DEFAULT NOW()"))
                         else:
                             session.execute(text(f"ALTER TABLE registrations ADD COLUMN {column_name} {column_type}"))
                         session.commit()
-                        logger.info(f"   ✅ Колонка '{column_name}' добавлена")
+                        logger.info(f"   ✅ Колонка '{column_name}' добавлен")
                     except Exception as e:
                         logger.error(f"   ❌ Ошибка добавления колонки '{column_name}': {e}")
                         session.rollback()
@@ -275,6 +277,25 @@ def fix_database_schema():
                     logger.info("   ✅ Индекс для status создан")
                 except Exception as e:
                     logger.error(f"   ❌ Ошибка создания индекса: {e}")
+        
+        # ===== Таблица events =====
+        if 'events' not in inspector.get_table_names():
+            logger.warning("⚠️ Таблица 'events' не найдена, создаем...")
+            try:
+                session.execute(text("""
+                    CREATE TABLE events (
+                        id SERIAL PRIMARY KEY,
+                        name VARCHAR(200) NOT NULL,
+                        event_date DATE NOT NULL,
+                        description TEXT,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    )
+                """))
+                logger.info("   ✅ Таблица 'events' создана")
+            except Exception as e:
+                logger.error(f"   ❌ Ошибка создания таблицы 'events': {e}")
         
         logger.info("✅ Проверка схемы завершена")
         
