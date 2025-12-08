@@ -13,6 +13,27 @@ logger = logging.getLogger(__name__)
 
 Base = declarative_base()
 
+class Event(Base):
+    __tablename__ = 'events'
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(200), nullable=False)
+    event_date = Column(Date, nullable=False)
+    description = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'event_date': self.event_date.isoformat() if self.event_date else None,
+            'description': self.description,
+            'is_active': self.is_active,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None
+        }
 
 class Registration(Base):
     __tablename__ = 'registrations'
@@ -28,8 +49,12 @@ class Registration(Base):
     experience = Column(Text, nullable=False)
     status = Column(String(20), default='pending', index=True)
     admin_comment = Column(Text)
+    event_id = Column(Integer, ForeignKey('events.id'))
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Связь
+    event = relationship("Event")
     
     def to_dict(self):
         return {
@@ -44,6 +69,8 @@ class Registration(Base):
             'experience': self.experience,
             'status': self.status,
             'admin_comment': self.admin_comment,
+            'event_id': self.event_id,
+            'event_name': self.event.name if self.event else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'updated_at': self.updated_at.isoformat() if self.updated_at else None
         }
